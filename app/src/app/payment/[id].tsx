@@ -3,7 +3,7 @@ import { useCallback, useState, type ReactNode } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { BankLinkCard } from '../../components/bank-link';
 import { Banner, Body, Button, Card, DetailRow, ErrorText, Field, Loading, Screen, StatusChip, Title } from '../../components/ui';
-import type { OrderView, PaymentInstructions } from '../../lib/api';
+import type { OrderView, TransferDetails } from '../../lib/api';
 import { amountInWords, formatInr } from '../../lib/money';
 import { useSession } from '../../lib/session';
 import { colors } from '../../lib/theme';
@@ -11,8 +11,6 @@ import { openUpiApp } from '../../lib/upi';
 import { useAction } from '../../lib/use-action';
 
 const POLL_MS = 3000;
-
-type TransferDetails = PaymentInstructions['payment'];
 
 export default function Payment() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -105,13 +103,7 @@ function PayerStep({ order, onChange }: StepProps) {
   const sending = order.status === 'awaiting_transfer' || order.status === 'not_received';
 
   const commission = (
-    <CommissionCard
-      order={order}
-      details={instructions.commission}
-      reference={instructions.reference}
-      onChange={onChange}
-      numbered={sending}
-    />
+    <CommissionCard order={order} onChange={onChange} numbered={sending} />
   );
 
   const oneApproval = <OneApprovalCard order={order} onChange={onChange} />;
@@ -256,38 +248,47 @@ function OneApprovalCard({ order, onChange }: StepProps) {
   );
 }
 
-function CommissionCard({
-  order,
-  details,
-  reference,
-  onChange,
-  numbered,
-}: StepProps & { details: TransferDetails; reference: string; numbered: boolean }) {
-  const { api, sandbox } = useSession();
+/** ePay's commission: only the amount and a UPI button. ePay's account details never reach the app. */
+function CommissionCard({ order, onChange, numbered }: StepProps & { numbered: boolean }) {
+  const { api, me, sandbox } = useSession();
   const { run, busy, error } = useAction();
+  const title = `${numbered ? '2. ' : ''}${formatInr(order.fee)} commission to ePay`;
+  const upiIntent = order.instructions?.commission.upiIntent ?? null;
+
+  if (order.commissionPaid) {
+    return (
+      <Card>
+        <Title>{title}</Title>
+        <Banner tone="success">✓ ePay has received it</Banner>
+      </Card>
+    );
+  }
   return (
-    <TransferCard
-      title={`${numbered ? '2. ' : ''}${formatInr(order.fee)} commission to ePay`}
-      details={details}
-      reference={reference}
-      done={order.commissionPaid === true}
-      doneLabel="ePay has received it"
-    >
-      {order.commissionPaid ? null : (
+    <Card>
+      <Title>{title}</Title>
+      {sandbox ? (
         <>
-          <Body muted>ePay's account never changes, so add it as a beneficiary once. Keep the reference in the remarks.</Body>
-          {sandbox ? (
-            <Button
-              title="Simulate commission received"
-              variant="secondary"
-              onPress={() => run(async () => onChange(await api.sandbox.payCommission(order.id)))}
-              busy={busy}
-            />
-          ) : null}
-          <ErrorText error={error} />
+          <Banner tone="warning">Sandbox: no UPI app opens and no money moves.</Banner>
+          <Button
+            title="Simulate commission received"
+            variant="secondary"
+            onPress={() => run(async () => onChange(await api.sandbox.payCommission(order.id)))}
+            busy={busy}
+          />
         </>
+      ) : upiIntent ? (
+        <>
+          <Body muted>Your UPI app opens with the amount and this payment's reference filled in.</Body>
+          <Button title={`Pay ${formatInr(order.fee)} with UPI`} onPress={() => run(() => openUpiApp(upiIntent))} busy={busy} />
+        </>
+      ) : (
+        <Body>
+          This commission is over the UPI limit.{' '}
+          {me?.oneApproval === 'linked' ? 'Send it with one approval above.' : 'Link your bank to send it with one approval, or contact ePay.'}
+        </Body>
       )}
-    </TransferCard>
+      <ErrorText error={error} />
+    </Card>
   );
 }
 
@@ -296,15 +297,11 @@ function TransferCard({
   title,
   details,
   reference,
-  done = false,
-  doneLabel,
   children,
 }: {
   title: string;
   details: TransferDetails;
   reference: string;
-  done?: boolean;
-  doneLabel?: string;
   children?: ReactNode;
 }) {
   const { sandbox } = useSession();
@@ -315,26 +312,20 @@ function TransferCard({
   return (
     <Card>
       <Title>{title}</Title>
-      {done ? (
-        <Banner tone="success">✓ {doneLabel}</Banner>
-      ) : (
-        <>
-          {showUpi ? (
-            <Button title={`Pay ${formatInr(details.amount)} with UPI`} onPress={() => run(() => openUpiApp(upiIntent!))} />
-          ) : null}
-          <Text style={styles.subheading}>{showUpi ? 'Or by bank transfer' : 'By bank transfer'}</Text>
-          <DetailRow label="Account number" value={bankTransfer.accountNumber} copyable />
-          <DetailRow label="IFSC" value={bankTransfer.ifsc} copyable />
-          <DetailRow label="Name" value={bankTransfer.beneficiaryName} copyable />
-          <DetailRow label="Amount" value={formatInr(details.amount)} copyable copyValue={(details.amount / 100).toFixed(2)} />
-          <DetailRow label="Remarks" value={reference} copyable />
-          {bankTransfer.rails.length ? (
-            <Text style={styles.rails}>Use {bankTransfer.rails.map((rail) => rail.toUpperCase()).join(', ')}</Text>
-          ) : null}
-          <ErrorText error={error} />
-          {children}
-        </>
-      )}
+      {showUpi ? (
+        <Button title={`Pay ${formatInr(details.amount)} with UPI`} onPress={() => run(() => openUpiApp(upiIntent!))} />
+      ) : null}
+      <Text style={styles.subheading}>{showUpi ? 'Or by bank transfer' : 'By bank transfer'}</Text>
+      <DetailRow label="Account number" value={bankTransfer.accountNumber} copyable />
+      <DetailRow label="IFSC" value={bankTransfer.ifsc} copyable />
+      <DetailRow label="Name" value={bankTransfer.beneficiaryName} copyable />
+      <DetailRow label="Amount" value={formatInr(details.amount)} copyable copyValue={(details.amount / 100).toFixed(2)} />
+      <DetailRow label="Remarks" value={reference} copyable />
+      {bankTransfer.rails.length ? (
+        <Text style={styles.rails}>Use {bankTransfer.rails.map((rail) => rail.toUpperCase()).join(', ')}</Text>
+      ) : null}
+      <ErrorText error={error} />
+      {children}
     </Card>
   );
 }

@@ -1,7 +1,7 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { bankName } from '../src/banks.ts';
-import { findReference, paymentInstructions, referenceFor, splitLegs } from '../src/checkout.ts';
+import { findReference, paymentInstructions, referenceFor, splitLegs, type PaymentInstructions } from '../src/checkout.ts';
 import { DEFAULT_FEE_POLICY, feeFor, feePercent, type FeePolicy } from '../src/fees.ts';
 import { formatInr } from '../src/money.ts';
 import { AccountVerification, maskAccount, type VerifiedAccountStore } from '../src/onboarding.ts';
@@ -18,7 +18,17 @@ import type {
   VerifiedBankAccount,
 } from '../src/providers/types.ts';
 import { planCollection } from '../src/router.ts';
-import type { ConfigResponse, MeView, OrderStatus, OrderView, OtpResponse, PayeeView, PlanView, SessionResponse } from './api-types.ts';
+import type {
+  ConfigResponse,
+  MeView,
+  OrderStatus,
+  OrderView,
+  OtpResponse,
+  PayeeView,
+  PayerInstructions,
+  PlanView,
+  SessionResponse,
+} from './api-types.ts';
 import { normalizeMobile, OtpService, OtpTooSoonError, RateLimiter, SandboxOtpSender, Sessions } from './auth.ts';
 import { MemoryStore, newOrderId, type Order, type OrderChanges, type User } from './store.ts';
 
@@ -70,6 +80,11 @@ export function createSandboxDeps(
     feePolicy: DEFAULT_FEE_POLICY,
     sandbox: { partner, otpSender },
   } satisfies ApiDeps;
+}
+
+/** Leaves ePay's account details out of what the payer's app gets: the commission is just an amount and a UPI link. */
+function payerInstructions({ reference, payment, commission }: PaymentInstructions): PayerInstructions {
+  return { reference, payment, commission: { amount: commission.amount, upiIntent: commission.upiIntent } };
 }
 
 class HttpError extends Error {
@@ -168,7 +183,7 @@ export function createApiServer(deps: ApiDeps): Server {
       fee: order.fee,
       status: order.status,
       commissionPaid: role === 'payer' ? order.commissionPaid : null,
-      instructions: role === 'payer' ? order.instructions : null,
+      instructions: role === 'payer' ? payerInstructions(order.instructions) : null,
       oneApproval: role === 'payer' && payerLinked && bankRequest?.status !== 'pending' && unsentParts(order).length > 0,
       bankRequest:
         role === 'payer' && bankRequest

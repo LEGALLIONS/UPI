@@ -14,11 +14,11 @@ ePay earns a **0.2% commission** on each payment, on top of the amount. The paye
 4. **Enter the amount.** ePay shows the total: the amount, plus its commission (0.2%, at least ₹1).
 5. **Send both parts**, bank to bank:
    - **The amount** straight to the payee's verified UPI ID (within the UPI limit) or account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT
-   - **The commission** straight to ePay's permanent account, with the payment's reference (e.g. `EPAY2C76CDDE`) in the remarks
+   - **The commission** straight to ePay's own account. The payer sees only the amount: ePay's account number, IFSC and name never reach the app
 
    There are two ways to send them:
    - **With one approval**, if ePay has an API agreement with the payer's bank. The payer links their current account once (approving ePay in their bank's net banking). For each payment, ePay sends their bank one request with both parts, the payer approves once in their bank, and the bank sends both and reports their UTRs back, so nothing is typed. If the bank sends only one part, the other stays open to request again or send by hand; the amount is never requested twice.
-   - **As two transfers**, from any bank: ePay shows both on one screen with a UPI button where UPI fits and bank details to copy. The payer sends them in either order and enters the amount's UTR. ePay's account never changes, so payers add it as a beneficiary once.
+   - **As two transfers**, from any bank: ePay shows both on one screen. The amount has a UPI button where UPI fits, and the payee's bank details to copy. The commission is a single "Pay with UPI" button, whose link carries ePay's UPI ID and the payment's reference (e.g. `EPAY2C76CDDE`). The payer sends them in either order and enters the amount's UTR. A commission over the UPI limit (on payments above ₹5 crore) goes with one approval instead.
 6. **The payee confirms** in the app that the amount arrived. If it hasn't, they tap "Not received yet" and the payer checks with their bank.
 7. **The commission is confirmed** by the payer's bank (one approval) or by ePay's own bank reporting it arriving, matched by the reference. Until it's confirmed, the payer can't start another payment.
 

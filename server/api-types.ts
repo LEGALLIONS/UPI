@@ -1,11 +1,22 @@
 // The HTTP API between the ePay app and this server. The app imports these types too.
-import type { PaymentInstructions } from '../src/checkout.ts';
+import type { TransferDetails } from '../src/checkout.ts';
 import type { Paise } from '../src/money.ts';
 import type { MaskedBankAccount } from '../src/onboarding.ts';
 import type { UpiPaymentRequest } from '../src/providers/types.ts';
 import type { CollectionMethod, CollectionPlan } from '../src/router.ts';
 
-export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, PaymentInstructions, UpiPaymentRequest };
+export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, TransferDetails, UpiPaymentRequest };
+
+/**
+ * What the payer sees: where to send the amount, and only the amount of the
+ * commission with a UPI link for it. ePay's account details stay on the server.
+ */
+export interface PayerInstructions {
+  reference: string;
+  payment: TransferDetails;
+  /** upiIntent is null when the commission is over the UPI limit; it then goes with one approval. */
+  commission: { amount: Paise; upiIntent: string | null };
+}
 
 export interface ErrorResponse {
   error: string;
@@ -100,8 +111,8 @@ export interface OrderView {
   status: OrderStatus;
   /** Whether ePay's bank has reported the commission arriving. null for the payee, who doesn't pay it. */
   commissionPaid: boolean | null;
-  /** Payer only: where to send the amount and the commission. */
-  instructions: PaymentInstructions | null;
+  /** Payer only: where to send the amount, and the commission to pay. */
+  instructions: PayerInstructions | null;
   /** Payer only: whatever is still to send can go to their bank for one approval now. */
   oneApproval: boolean;
   /** Payer only: the latest request to their bank, if any. */

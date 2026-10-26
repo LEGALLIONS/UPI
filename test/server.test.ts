@@ -81,17 +81,15 @@ describe('ePay API (sandbox)', () => {
       beneficiaryName: 'MEENA STEELS',
       rails: ['imps', 'rtgs', 'neft'],
     });
-    assert.equal(instructions.commission.amount, rupees(600));
-    assert.equal(
-      instructions.commission.upiIntent,
-      `upi://pay?pa=epay%40sandbox&pn=EPAY%20TECHNOLOGIES&am=600.00&cu=INR&tr=${order.reference}&tn=${order.reference}`,
+    assert.deepEqual(
+      instructions.commission,
+      {
+        amount: rupees(600),
+        upiIntent: `upi://pay?pa=epay%40sandbox&pn=EPAY%20TECHNOLOGIES&am=600.00&cu=INR&tr=${order.reference}&tn=${order.reference}`,
+      },
+      "only the amount and a UPI link: ePay's account details stay on the server",
     );
-    assert.deepEqual(instructions.commission.bankTransfer, {
-      accountNumber: '777705550001',
-      ifsc: 'SBXN0000001',
-      beneficiaryName: 'EPAY TECHNOLOGIES',
-      rails: ['imps', 'neft'],
-    });
+    assert.doesNotMatch(JSON.stringify(created.body), /777705550001|SBXN0000001/);
 
     const asPayee = await view(supplier, order.id);
     assert.equal(asPayee.body.role, 'payee');
