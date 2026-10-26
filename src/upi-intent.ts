@@ -4,8 +4,11 @@ export interface UpiIntentInput {
   payeeVpa: string;
   payeeName: string;
   amount: Paise;
-  /** Your reference for this payment; comes back in the payment status. */
-  transactionRef: string;
+  /**
+   * Merchant reference; comes back in the payment status. Leave it out when
+   * paying a person's own UPI ID: some UPI apps refuse such links that carry one.
+   */
+  transactionRef?: string;
   note?: string;
 }
 
@@ -22,8 +25,8 @@ export function buildUpiIntent(input: UpiIntentInput): string {
     ['pn', input.payeeName],
     ['am', toRupeeString(input.amount)],
     ['cu', 'INR'],
-    ['tr', input.transactionRef],
   ];
+  if (input.transactionRef) params.push(['tr', input.transactionRef]);
   if (input.note) params.push(['tn', input.note]);
   // encodeURIComponent rather than URLSearchParams: some UPI apps read "+" literally instead of as a space.
   return `upi://pay?${params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join('&')}`;

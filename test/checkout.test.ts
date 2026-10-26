@@ -1,74 +1,65 @@
 import assert from 'node:assert/strict';
-import { beforeEach, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import {
-  InMemoryAccountStore,
+  CRORE,
   LAKH,
-  SandboxPartner,
   buildUpiIntent,
+  feeFor,
+  feePercent,
+  paymentInstructions,
   planCollection,
   rupees,
-  startPayment,
   toRupeeString,
-  type CheckoutProviders,
 } from '../src/index.ts';
 
-const payer = { id: 'cust_1', name: 'Arun Traders', mobile: '9876543210' };
 const payee = {
   id: 'cust_2',
-  name: 'Meena Steels',
-  account: { accountNumber: '00112233445566', ifsc: 'ICIC0000123', holderName: 'MEENA STEELS' },
+  name: 'MEENA STEELS',
+  account: { accountNumber: '00112233445566', ifsc: 'ICIC0000123', holderName: 'MEENA STEELS', vpa: 'meenasteels@okicici' },
 };
-const returnUrl = 'https://example.com/paid';
+const orderId = 'ord_9c1d2e3f-0000-4a5b-8c7d-ab12cd34ef56';
 
-describe('startPayment', () => {
-  let providers: CheckoutProviders;
-
-  beforeEach(() => {
-    const partner = new SandboxPartner({ webhookSecret: 'test-secret' });
-    providers = { gateway: partner, virtualAccounts: partner, mandates: partner, accounts: new InMemoryAccountStore() };
-  });
-
-  it('creates a UPI request for the planned amount', async () => {
+describe('paymentInstructions', () => {
+  it("sends UPI and bank transfer straight to the payee's own account", () => {
     const plan = planCollection({ amount: rupees(45_000.5) });
-    const result = await startPayment({ orderId: 'ord_1', payer, payee, plan, method: 'upi', returnUrl }, providers);
-    assert.equal(result.method, 'upi');
-    assert.match(result.method === 'upi' ? result.upiIntent : '', /am=45000\.50/);
-  });
-
-  it('refuses UPI when the plan ruled it out', async () => {
-    const plan = planCollection({ amount: 3 * LAKH });
-    await assert.rejects(
-      startPayment({ orderId: 'ord_1', payer, payee, plan, method: 'upi', returnUrl }, providers),
-      /Over the ₹1,00,000.00 UPI limit/,
+    const instructions = paymentInstructions({ orderId, payee, plan });
+    assert.equal(instructions.reference, 'EPAYCD34EF56');
+    assert.equal(
+      instructions.upiIntent,
+      'upi://pay?pa=meenasteels%40okicici&pn=MEENA%20STEELS&am=45000.50&cu=INR&tn=EPAYCD34EF56',
     );
-  });
-
-  it('sends net banking to a redirect on the bank side', async () => {
-    const plan = planCollection({ amount: 3 * LAKH });
-    const result = await startPayment({ orderId: 'ord_1', payer, payee, plan, method: 'netbanking', returnUrl }, providers);
-    assert.equal(result.method, 'netbanking');
-    assert.ok(result.method === 'netbanking' && result.redirectUrl.startsWith('https://'));
-  });
-
-  it('gives the same virtual account to a payer and payee every time', async () => {
-    const plan = planCollection({ amount: 30 * LAKH });
-    const first = await startPayment({ orderId: 'ord_1', payer, payee, plan, method: 'bank_transfer', returnUrl }, providers);
-    const second = await startPayment({ orderId: 'ord_2', payer, payee, plan, method: 'bank_transfer', returnUrl }, providers);
-    assert.deepEqual(first, second);
-    assert.deepEqual(first.method === 'bank_transfer' && first.rails, ['rtgs', 'neft']);
-  });
-
-  it('needs a verified account before setting up e-NACH', async () => {
-    const plan = planCollection({ amount: 25 * LAKH, recurring: true });
-    const start = () => startPayment({ orderId: 'ord_1', payer, payee, plan, method: 'enach', returnUrl }, providers);
-    await assert.rejects(start(), /Verify cust_1's bank account/);
-
-    await providers.accounts.saveAccount(payer.id, {
-      accountNumber: '50100123456789',
-      ifsc: 'HDFC0001234',
-      holderName: 'ARUN TRADERS',
+    assert.deepEqual(instructions.bankTransfer, {
+      accountNumber: '00112233445566',
+      ifsc: 'ICIC0000123',
+      beneficiaryName: 'MEENA STEELS',
+      rails: ['imps', 'neft'],
     });
-    assert.equal((await start()).method, 'enach');
+  });
+
+  it('leaves out UPI above the limit, or when the payee has no UPI ID', () => {
+    const big = paymentInstructions({ orderId, payee, plan: planCollection({ amount: 3 * LAKH }) });
+    assert.equal(big.upiIntent, null);
+    assert.deepEqual(big.bankTransfer.rails, ['imps', 'rtgs', 'neft']);
+
+    const noUpi = { ...payee, account: { ...payee.account, vpa: undefined } };
+    assert.equal(paymentInstructions({ orderId, payee: noUpi, plan: planCollection({ amount: LAKH }) }).upiIntent, null);
+  });
+});
+
+describe('feeFor', () => {
+  it('charges 0.2%, rounded to the nearest paisa', () => {
+    assert.equal(feePercent(), '0.2');
+    assert.equal(feeFor(3 * LAKH), rupees(600));
+    assert.equal(feeFor(CRORE), rupees(20_000));
+    assert.equal(feeFor(rupees(1_234.56)), 247);
+  });
+
+  it('never charges less than ₹1', () => {
+    assert.equal(feeFor(rupees(100)), rupees(1));
+  });
+
+  it('follows a different rate when given one', () => {
+    assert.equal(feeFor(3 * LAKH, { rateBps: 50, minimum: rupees(1) }), rupees(1_500));
   });
 });
 
@@ -85,10 +76,7 @@ describe('buildUpiIntent', () => {
   });
 
   it('rejects something that is not a UPI ID', () => {
-    assert.throws(
-      () => buildUpiIntent({ payeeVpa: 'not-a-vpa', payeeName: 'X', amount: 100, transactionRef: 'r' }),
-      /Not a UPI ID/,
-    );
+    assert.throws(() => buildUpiIntent({ payeeVpa: 'not-a-vpa', payeeName: 'X', amount: 100 }), /Not a UPI ID/);
   });
 });
 

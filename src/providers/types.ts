@@ -1,15 +1,18 @@
 import type { Paise } from '../money.ts';
 import type { TransferRail } from '../router.ts';
 
-// What this project needs from a licensed partner (payment aggregator or bank).
-// Each interface maps to an API that Cashfree, Razorpay, Setu, Decentro and
-// others already offer; write one adapter per partner.
+// What ePay needs from a licensed partner (payment aggregator or bank). Payments
+// themselves go straight from payer's bank to payee's bank, so a partner is only
+// needed to verify bank accounts and to collect ePay's own fee. Each interface
+// maps to an API that Cashfree, Razorpay, Setu, Decentro and others offer.
 
 /** Account details reported by the bank itself, never typed in by the customer. */
 export interface VerifiedBankAccount {
   accountNumber: string;
   ifsc: string;
   holderName: string;
+  /** The UPI ID the ₹1 came from, so others can pay this account by UPI. */
+  vpa?: string;
 }
 
 export interface Customer {
@@ -18,10 +21,7 @@ export interface Customer {
   mobile: string;
 }
 
-/**
- * Who receives a payment. The partner settles straight to their verified
- * account (split settlement / linked accounts), so the money never sits with us.
- */
+/** Who receives a payment, straight into their verified account. */
 export interface Payee {
   id: string;
   name: string;
@@ -41,7 +41,7 @@ export type PennyDropResult =
 
 /**
  * Reverse penny drop: the customer pays ₹1 by UPI from their own app, and the
- * provider reports the account number, IFSC and name it came from (and refunds the ₹1).
+ * provider reports the account number, IFSC, name and UPI ID it came from (and refunds the ₹1).
  */
 export interface ReversePennyDropProvider {
   createRequest(input: { referenceId: string }): Promise<UpiPaymentRequest>;
@@ -49,54 +49,20 @@ export interface ReversePennyDropProvider {
   parsePennyDropWebhook(rawBody: string, signature: string): Promise<PennyDropResult>;
 }
 
-/** What a partner's payment webhook reports. */
-export type PaymentEvent =
-  /** A UPI or net banking order finished, or an e-NACH mandate was approved or refused. */
-  | { kind: 'order'; requestId: string; status: 'success' | 'failed' }
-  /** Money arrived in a virtual account. utr is the bank's reference for the transfer. */
-  | { kind: 'transfer'; virtualAccountNumber: string; amount: Paise; utr: string };
-
-export interface OrderInput {
-  orderId: string;
-  amount: Paise;
-  payer: Customer;
-  payee: Payee;
+/** A UPI payment into ePay's own account finished. */
+export interface PaymentEvent {
+  requestId: string;
+  status: 'success' | 'failed';
 }
 
+/** Collects payments into ePay's own account: ePay's fee. Settlement time doesn't matter here. */
 export interface PaymentGateway {
-  /** UPI through the gateway, so the payee's verified-category limits apply. */
-  createUpiOrder(input: OrderInput): Promise<UpiPaymentRequest>;
-  /** The redirect goes to the payer's bank's own login page; their credentials never reach us. */
-  createNetbankingOrder(input: OrderInput & { returnUrl: string }): Promise<{ requestId: string; redirectUrl: string }>;
+  createUpiOrder(input: { orderId: string; amount: Paise; payer: Customer }): Promise<UpiPaymentRequest>;
   /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
   parsePaymentWebhook(rawBody: string, signature: string): Promise<PaymentEvent>;
 }
 
-export interface VirtualAccount {
-  accountNumber: string;
-  ifsc: string;
-  beneficiaryName: string;
-}
-
-export interface VirtualAccountProvider {
-  /**
-   * Same account every time for a payer and payee, so the payer adds it as a
-   * beneficiary in their bank once and every transfer matches up automatically.
-   */
-  getOrCreate(input: { payer: Customer; payee: Payee }): Promise<VirtualAccount>;
-}
-
-export interface MandateProvider {
-  /** The payer approves on their bank's page; the bank then allows debits up to maxAmount. */
-  createEnachMandate(input: {
-    payer: Customer;
-    payerAccount: VerifiedBankAccount;
-    payee: Payee;
-    maxAmount: Paise;
-    returnUrl: string;
-  }): Promise<{ mandateId: string; authUrl: string }>;
-}
-
+/** Sends money from a business's own current account through its bank's API (connected banking). */
 export interface PayoutProvider {
   send(input: {
     payoutId: string;

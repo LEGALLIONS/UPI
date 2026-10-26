@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { PaymentInstruction } from '../src/checkout.ts';
+import type { PaymentInstructions } from '../src/checkout.ts';
 import type { UpiMerchantCategory } from '../src/limits.ts';
 import type { Paise } from '../src/money.ts';
-import type { CollectionMethod } from '../src/router.ts';
+import type { UpiPaymentRequest } from '../src/providers/types.ts';
 import type { OrderStatus } from './api-types.ts';
 
 // In-memory storage, so the server runs with nothing else installed.
@@ -20,12 +20,20 @@ export interface Order {
   payerId: string;
   payeeId: string;
   amount: Paise;
-  method: CollectionMethod;
-  instruction: PaymentInstruction;
+  fee: Paise;
+  /** The fee request to show the payer now. */
+  feeRequest: UpiPaymentRequest;
+  /** Every fee request made for this order, so a late payment of an older one still counts. */
+  feeRequestIds: string[];
+  feeFailed: boolean;
+  /** Worked out when the order is made; shown to the payer once the fee is paid. */
+  instructions: PaymentInstructions;
   status: OrderStatus;
   utr: string | null;
   createdAt: Date;
 }
+
+export type OrderChanges = Partial<Pick<Order, 'status' | 'utr' | 'feeRequest' | 'feeFailed'>>;
 
 export function newOrderId(): string {
   return `ord_${randomUUID()}`;
@@ -35,7 +43,6 @@ export class MemoryStore {
   #users = new Map<string, User>();
   #userIdsByMobile = new Map<string, string>();
   #orders = new Map<string, Order>();
-  #transferUtrs = new Set<string>();
 
   findOrCreateUser(mobile: string): User {
     const existing = this.#userIdsByMobile.get(mobile);
@@ -55,62 +62,42 @@ export class MemoryStore {
     return id ? this.#users.get(id) : undefined;
   }
 
-  createOrder(fields: Omit<Order, 'status' | 'utr' | 'createdAt'>): Order {
-    const order: Order = { ...fields, status: 'pending', utr: null, createdAt: new Date() };
+  createOrder(fields: Omit<Order, 'feeRequestIds' | 'feeFailed' | 'status' | 'utr' | 'createdAt'>): Order {
+    const order: Order = {
+      ...fields,
+      feeRequestIds: [fields.feeRequest.requestId],
+      feeFailed: false,
+      status: 'awaiting_fee',
+      utr: null,
+      createdAt: new Date(),
+    };
     this.#orders.set(order.id, order);
     return order;
   }
 
-  updateOrder(id: string, changes: Pick<Order, 'status'> & Partial<Pick<Order, 'utr'>>): void {
+  updateOrder(id: string, changes: OrderChanges): Order {
     const order = this.#orders.get(id);
     if (!order) throw new Error(`No order ${id}`);
-    this.#orders.set(id, { ...order, ...changes });
-  }
-
-  /** False if this bank reference was seen before, so a repeated webhook can't pay a second order. */
-  recordTransfer(utr: string): boolean {
-    if (this.#transferUtrs.has(utr)) return false;
-    this.#transferUtrs.add(utr);
-    return true;
+    const updated = { ...order, ...changes };
+    if (changes.feeRequest) updated.feeRequestIds = [...order.feeRequestIds, changes.feeRequest.requestId];
+    this.#orders.set(id, updated);
+    return updated;
   }
 
   getOrder(id: string): Order | undefined {
     return this.#orders.get(id);
   }
 
-  ordersForPayer(payerId: string, limit: number): Order[] {
+  /** Payments this user sent or received, newest first. */
+  ordersFor(userId: string, limit: number): Order[] {
     // Map keeps insertion order, so reversing gives newest first.
     return [...this.#orders.values()]
-      .filter((order) => order.payerId === payerId)
+      .filter((order) => order.payerId === userId || order.payeeId === userId)
       .reverse()
       .slice(0, limit);
   }
 
-  /** The order a UPI, net banking or e-NACH event refers to. */
-  findOrderByRequestId(requestId: string): Order | undefined {
-    return [...this.#orders.values()].find((order) => requestIdOf(order.instruction) === requestId);
-  }
-
-  /** The oldest pending transfer to this virtual account for exactly this amount. */
-  findPendingTransfer(virtualAccountNumber: string, amount: Paise): Order | undefined {
-    return [...this.#orders.values()].find(
-      (order) =>
-        order.status === 'pending' &&
-        order.instruction.method === 'bank_transfer' &&
-        order.instruction.accountNumber === virtualAccountNumber &&
-        order.amount === amount,
-    );
-  }
-}
-
-function requestIdOf(instruction: PaymentInstruction): string | undefined {
-  switch (instruction.method) {
-    case 'upi':
-    case 'netbanking':
-      return instruction.requestId;
-    case 'enach':
-      return instruction.mandateId;
-    case 'bank_transfer':
-      return undefined;
+  findOrderByFeeRequest(requestId: string): Order | undefined {
+    return [...this.#orders.values()].find((order) => order.feeRequestIds.includes(requestId));
   }
 }

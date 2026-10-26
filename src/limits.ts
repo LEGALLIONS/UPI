@@ -1,4 +1,4 @@
-import { CRORE, LAKH, type Paise } from './money.ts';
+import { LAKH, type Paise } from './money.ts';
 
 // Ceilings set by NPCI and RBI, as of NPCI's UPI limit change of 15 Sept 2025.
 // They get revised, and each bank may set lower limits for its own customers,
@@ -32,7 +32,6 @@ export interface RailLimits {
   upiMerchantCategories: Record<UpiMerchantCategory, UpiLimit>;
   impsMaxPerTxn: Paise;
   rtgsMinPerTxn: Paise;
-  enachMaxPerDebit: Paise;
 }
 
 export const DEFAULT_LIMITS: RailLimits = {
@@ -40,5 +39,4 @@ export const DEFAULT_LIMITS: RailLimits = {
   upiMerchantCategories: UPI_MERCHANT_CATEGORIES,
   impsMaxPerTxn: 5 * LAKH,
   rtgsMinPerTxn: 2 * LAKH,
-  enachMaxPerDebit: CRORE,
 };

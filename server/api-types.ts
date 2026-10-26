@@ -1,11 +1,11 @@
 // The HTTP API between the ePay app and this server. The app imports these types too.
-import type { PaymentInstruction } from '../src/checkout.ts';
+import type { PaymentInstructions } from '../src/checkout.ts';
 import type { Paise } from '../src/money.ts';
 import type { MaskedBankAccount } from '../src/onboarding.ts';
 import type { UpiPaymentRequest } from '../src/providers/types.ts';
 import type { CollectionMethod, CollectionPlan } from '../src/router.ts';
 
-export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, PaymentInstruction, UpiPaymentRequest };
+export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, PaymentInstructions, UpiPaymentRequest };
 
 export interface ErrorResponse {
   error: string;
@@ -41,6 +41,8 @@ export interface MeView {
   mobile: string;
   /** null until the ₹1 UPI verification has gone through. */
   account: MaskedBankAccount | null;
+  /** The UPI ID others can pay this account on, if the bank reported one. */
+  upiId: string | null;
 }
 
 /** Shown to a payer before they pay, so they can check they have the right person. */
@@ -55,28 +57,53 @@ export interface PayeeView {
 export interface PlanRequest {
   payeeId: string;
   amount: Paise;
-  recurring?: boolean;
 }
 
-export interface PaymentRequest extends PlanRequest {
-  method: CollectionMethod;
-  /** The app's deep link; the bank sends the payer back here after net banking or e-NACH. */
-  returnUrl: string;
+/** The ways to send the amount, plus ePay's fee, which the payer pays separately. */
+export interface PlanView extends CollectionPlan {
+  fee: Paise;
+  /** "0.2" */
+  feePercent: string;
 }
 
-/** For e-NACH, completed means the mandate was approved. */
-export type OrderStatus = 'pending' | 'completed' | 'failed';
+export type PaymentRequest = PlanRequest;
+
+/**
+ * awaiting_fee: the payer pays ePay's fee by UPI; the partner confirms it by webhook.
+ * awaiting_transfer: the payer sends the amount straight to the payee's bank.
+ * sent: the payer has given the bank reference; the payee checks their account.
+ * received: the payee has confirmed. Done.
+ * not_received: the payee can't find it; the payer checks and gives the reference again.
+ */
+export type OrderStatus = 'awaiting_fee' | 'awaiting_transfer' | 'sent' | 'received' | 'not_received';
+
+export interface PartyView {
+  id: string;
+  name: string;
+}
 
 export interface OrderView {
   id: string;
+  /** Whether the person looking is paying or being paid. */
+  role: 'payer' | 'payee';
+  payer: PartyView;
   payee: PayeeView;
   amount: Paise;
-  method: CollectionMethod;
+  fee: Paise;
   status: OrderStatus;
-  instruction: PaymentInstruction;
-  /** The bank's reference for a completed bank transfer. */
+  /** Payer only, while the fee is unpaid. */
+  feeRequest: UpiPaymentRequest | null;
+  /** The last fee payment failed; the payer can ask for a new one. */
+  feeFailed: boolean;
+  /** Payer only, once the fee is paid: where to send the money. */
+  instructions: PaymentInstructions | null;
+  /** The bank's reference for the transfer, as the payer gave it. */
   utr: string | null;
   createdAt: string;
+}
+
+export interface SentRequest {
+  utr: string;
 }
 
 export interface SandboxPennyDropRequest {
@@ -85,6 +112,6 @@ export interface SandboxPennyDropRequest {
   holderName?: string;
 }
 
-export interface SandboxCompleteRequest {
+export interface SandboxFeeRequest {
   status?: 'success' | 'failed';
 }
