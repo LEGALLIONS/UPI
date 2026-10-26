@@ -46,6 +46,23 @@ Scan the QR code with your phone's camera (iPhone) or with Expo Go (Android). Th
 
 In the sandbox, the OTP appears on screen instead of by SMS. To pay someone, sign in on a second phone (or with a second number) and verify that account too.
 
+## Install the Android app (APK)
+
+This gives you ePay as a normal app on your phone, with no computer needed once it's set up. It still runs in sandbox mode.
+
+**1. Put the server online.** It needs an https address the app can reach from anywhere. The free plan on [Render](https://render.com) works:
+- Sign up at render.com with your GitHub account.
+- Choose **New → Blueprint**, pick this repository, and tap **Apply**. Render reads `render.yaml` and starts the server.
+- When it says **Live**, copy its address, e.g. `https://epay-server.onrender.com`. Opening that address with `/health` added should show `{"ok":true}`.
+
+The free plan sleeps after 15 minutes without use. The first request after that takes about a minute, and because the server keeps data in memory, all accounts and payments are wiped. Sign in and verify again when that happens.
+
+**2. Build the APK.** On GitHub, open the **Actions** tab, choose **Android APK**, and tap **Run workflow**. Paste the server address and tap **Run workflow** again. The build takes about 20 minutes.
+
+**3. Install it.** On your phone, open the repository's **Releases** page, open the newest **ePay app** release, and tap the `.apk` file. Android asks you to allow installing apps from your browser the first time; allow it, then tap **Install**.
+
+To update the app, run the workflow again and install the new APK over the old one. If the server address changes, build a new APK, because the address is built into the app.
+
 ## Payment limits used
 
 | Rail | Limit | Used for |
@@ -82,7 +99,7 @@ npm run typecheck
 
 - **Partner:** work through a licensed payment aggregator or bank, using its split-settlement feature so money goes straight to payees. Holding customers' money yourself needs RBI authorisation.
 - **Server:** add a database, an SMS provider and the partner adapters; serve it over HTTPS; and set a strong `WEBHOOK_SECRET`. Remove the sandbox routes by not passing `sandbox` to `createApiServer`.
-- **App:** set `EXPO_PUBLIC_API_URL` to your HTTPS server. Change `com.legallions.epay` in `app/app.json` if you publish under a different name. Build store apps with EAS (`npx eas-cli@latest build`).
+- **App:** set `EXPO_PUBLIC_API_URL` to your HTTPS server. Change `com.legallions.epay` in `app/app.json` if you publish under a different name. Build store apps with EAS (`npx eas-cli@latest build`). The APK from the **Android APK** workflow is signed with React Native's standard debug key: fine for installing directly, but the Play Store needs your own signing key.
 - **Return links:** banks send payers back to `epay://payment-return`. Some gateways only accept `https://` return URLs; if so, host a page that redirects to the app link.
 - **iOS UPI apps:** iPhones have no UPI app chooser, so `app/src/lib/upi-links.ts` opens Google Pay, PhonePe or Paytm by name. Check these against your partner's iOS documentation.
 - **Business payees:** higher UPI limits apply only to payees that pass business verification (KYB) in an eligible NPCI category. Set `merchantCategory` on those users.

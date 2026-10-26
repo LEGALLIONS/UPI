@@ -4,7 +4,9 @@ import { createApiServer, createSandboxDeps } from './app.ts';
 
 const port = Number(process.env.PORT ?? 3000);
 // The phone opens the sandbox bank page, so it needs an address the phone can reach.
-const publicUrl = process.env.PUBLIC_URL ?? `http://${lanAddress() ?? 'localhost'}:${port}`;
+// Render sets RENDER_EXTERNAL_URL; on other hosts set PUBLIC_URL to the server's https address.
+const publicUrl =
+  process.env.PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? `http://${lanAddress() ?? 'localhost'}:${port}`;
 
 const deps = createSandboxDeps({ publicUrl, webhookSecret: process.env.WEBHOOK_SECRET });
 createApiServer(deps).listen(port, () => {

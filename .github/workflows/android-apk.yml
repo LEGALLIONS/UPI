@@ -1,0 +1,80 @@
+# Builds the ePay Android app (APK).
+#
+# To get an APK for your phone: Actions tab → "Android APK" → "Run workflow",
+# enter your server's https address, and wait about 20 minutes. The APK is then
+# on the repository's Releases page, ready to download and install.
+#
+# Pull requests that change the app also run this, to check it still builds.
+name: Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Your ePay server address, e.g. https://epay-server.onrender.com"
+        required: true
+  pull_request:
+    paths:
+      - "app/**"
+      - ".github/workflows/android-apk.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Built into the app. A pull request build only checks that the app compiles.
+      EXPO_PUBLIC_API_URL: ${{ inputs.api_url || 'https://example.invalid' }}
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the server address
+        run: |
+          case "$EXPO_PUBLIC_API_URL" in
+            https://*) echo "Server: $EXPO_PUBLIC_API_URL" ;;
+            *) echo "::error::The server address must start with https:// (installed Android apps can't use plain http)"; exit 1 ;;
+          esac
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - run: npm ci
+
+      - name: Generate the Android project
+        run: npx expo prebuild --platform android --no-install
+
+      - name: Build the APK
+        working-directory: app/android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Name the APK
+        run: mv android/app/build/outputs/apk/release/app-release.apk "epay-${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: epay-apk
+          path: app/epay-*.apk
+
+      - name: Publish on the Releases page
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "apk-${{ github.run_number }}" epay-*.apk \
+            --target "$GITHUB_SHA" \
+            --title "ePay app, build ${{ github.run_number }}" \
+            --notes "Android app using the server at $EXPO_PUBLIC_API_URL. On your phone, tap the .apk file below to download and install it."
