@@ -119,7 +119,7 @@ export class SandboxPartner
     return {
       requestId,
       upiIntent: buildUpiIntent({ payeeVpa: this.#merchantVpa, payeeName, amount, transactionRef: requestId, note }),
-      expiresAt: new Date(Date.now() + REQUEST_TTL_MS),
+      expiresAt: new Date(Date.now() + REQUEST_TTL_MS).toISOString(),
     };
   }
 

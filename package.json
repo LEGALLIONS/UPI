@@ -1,7 +1,7 @@
 {
-  "name": "upi-high-value-payments",
+  "name": "ipay",
   "version": "0.1.0",
-  "description": "Routes business payments above the UPI limit to net banking, bank transfer or e-NACH, with bank-verified account details",
+  "description": "iPay: pay businesses by mobile number, above the UPI limit, through net banking, bank transfer or e-NACH",
   "type": "module",
   "private": true,
   "engines": {
@@ -10,6 +10,7 @@
   "scripts": {
     "test": "node --test \"test/**/*.test.ts\"",
     "typecheck": "tsc",
+    "server": "node server/main.ts",
     "demo": "node examples/demo.ts"
   },
   "devDependencies": {

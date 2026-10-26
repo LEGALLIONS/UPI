@@ -31,7 +31,8 @@ export interface Payee {
 export interface UpiPaymentRequest {
   requestId: string;
   upiIntent: string;
-  expiresAt: Date;
+  /** ISO 8601 */
+  expiresAt: string;
 }
 
 export type PennyDropResult =

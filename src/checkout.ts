@@ -3,7 +3,7 @@ import type { Customer, MandateProvider, Payee, PaymentGateway, VirtualAccountPr
 import type { CollectionMethod, CollectionPlan, TransferRail } from './router.ts';
 
 export type PaymentInstruction =
-  | { method: 'upi'; requestId: string; upiIntent: string; expiresAt: Date }
+  | { method: 'upi'; requestId: string; upiIntent: string; expiresAt: string }
   | { method: 'netbanking'; requestId: string; redirectUrl: string }
   | { method: 'bank_transfer'; accountNumber: string; ifsc: string; beneficiaryName: string; rails: TransferRail[] }
   | { method: 'enach'; mandateId: string; authUrl: string };
@@ -27,13 +27,16 @@ export interface StartPaymentInput {
   returnUrl: string;
 }
 
+/** The payer picked a method the plan ruled out, or never offered. */
+export class MethodUnavailableError extends Error {}
+
 /** Turns the payer's chosen option into what to show them next. */
 export async function startPayment(input: StartPaymentInput, providers: CheckoutProviders): Promise<PaymentInstruction> {
   const { orderId, payer, payee, plan, method, returnUrl } = input;
   const option = plan.options.find((candidate) => candidate.method === method);
   if (!option) {
     const why = plan.unavailable.find((candidate) => candidate.method === method)?.reason ?? 'not offered for this payment';
-    throw new Error(`Can't pay by ${method}: ${why}`);
+    throw new MethodUnavailableError(`Can't pay by ${method}: ${why}`);
   }
   const { amount } = plan;
 
