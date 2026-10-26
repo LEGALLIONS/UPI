@@ -1,6 +1,7 @@
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
+import { BankLinkCard } from '../components/bank-link';
 import { Body, Button, Card, ErrorText, Field, HeaderLink, Screen, SectionLabel, StatusChip } from '../components/ui';
 import type { OrderView, PayeeView } from '../lib/api';
 import { formatInr } from '../lib/money';
@@ -53,8 +54,11 @@ export default function Home() {
           </Text>
           {me.upiId ? <Text style={styles.accountDetail}>UPI: {me.upiId}</Text> : null}
           <Text style={styles.verified}>✓ Verified by your bank</Text>
+          {me.oneApproval === 'linked' ? <Text style={styles.verified}>✓ One-approval payments on</Text> : null}
         </View>
       ) : null}
+
+      <BankLinkCard />
 
       <SectionLabel>Pay someone</SectionLabel>
       <Card>

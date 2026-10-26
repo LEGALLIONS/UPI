@@ -1,6 +1,7 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
-import { StyleSheet, Text } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { BankLinkCard } from '../../components/bank-link';
 import { Banner, Body, Button, Card, DetailRow, ErrorText, Field, Loading, Screen, StatusChip, Title } from '../../components/ui';
 import type { OrderView, PaymentInstructions } from '../../lib/api';
 import { amountInWords, formatInr } from '../../lib/money';
@@ -113,6 +114,8 @@ function PayerStep({ order, onChange }: StepProps) {
     />
   );
 
+  const oneApproval = <OneApprovalCard order={order} onChange={onChange} />;
+
   if (!sending) {
     return (
       <>
@@ -126,7 +129,8 @@ function PayerStep({ order, onChange }: StepProps) {
             <Banner tone="warning">
               ePay hasn't received the {formatInr(order.fee)} commission yet. You can start your next payment once it arrives.
             </Banner>
-            {commission}
+            {oneApproval}
+            {order.bankRequest?.status === 'pending' ? null : commission}
           </>
         )}
       </>
@@ -140,47 +144,115 @@ function PayerStep({ order, onChange }: StepProps) {
           {payee} says the money hasn't arrived. Check with your bank, then enter the reference again once it has gone.
         </Banner>
       ) : null}
-      <Card>
-        <Title>Send these two payments</Title>
-        <Body>
-          Send both now, in whichever order you like: {formatInr(order.amount + order.fee)} in total. Each goes straight to
-          its own bank account.
-        </Body>
-      </Card>
+      {oneApproval}
+      {order.bankRequest?.status === 'pending' ? null : (
+        <>
+          <Card>
+            <Title>{order.oneApproval ? 'Or send the two transfers yourself' : 'Send these two payments'}</Title>
+            <Body>
+              Send both now, in whichever order you like: {formatInr(order.amount + order.fee)} in total. Each goes straight to
+              its own bank account.
+            </Body>
+          </Card>
 
-      <TransferCard
-        title={`1. ${formatInr(order.amount)} to ${payee}`}
-        details={instructions.payment}
-        reference={instructions.reference}
-      >
-        <Banner tone="info">
-          Many banks cap what you can send to a new beneficiary in the first day. Check your bank's limit before a large first
-          payment.
-        </Banner>
-      </TransferCard>
+          <TransferCard
+            title={`1. ${formatInr(order.amount)} to ${payee}`}
+            details={instructions.payment}
+            reference={instructions.reference}
+          >
+            <Banner tone="info">
+              Many banks cap what you can send to a new beneficiary in the first day. Check your bank's limit before a large first
+              payment.
+            </Banner>
+          </TransferCard>
 
-      {commission}
+          {commission}
 
-      <Card>
-        <Title>After sending the {formatInr(order.amount)}</Title>
-        <Field
-          label="Its bank reference (UTR or UPI Ref No.)"
-          hint="Your bank app shows it once the money has gone. Sandbox: type any 12 digits."
-          autoCapitalize="characters"
-          autoCorrect={false}
-          maxLength={26}
-          value={utr}
-          onChangeText={setUtr}
-        />
-        <ErrorText error={error} />
-        <Button
-          title="I've sent it"
-          onPress={() => run(async () => onChange(await api.markSent(order.id, utr)))}
-          busy={busy}
-          disabled={utr.replace(/\s/g, '').length < 12}
-        />
-      </Card>
+          <Card>
+            <Title>After sending the {formatInr(order.amount)}</Title>
+            <Field
+              label="Its bank reference (UTR or UPI Ref No.)"
+              hint="Your bank app shows it once the money has gone. Sandbox: type any 12 digits."
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={26}
+              value={utr}
+              onChangeText={setUtr}
+            />
+            <ErrorText error={error} />
+            <Button
+              title="I've sent it"
+              onPress={() => run(async () => onChange(await api.markSent(order.id, utr)))}
+              busy={busy}
+              disabled={utr.replace(/\s/g, '').length < 12}
+            />
+          </Card>
+        </>
+      )}
     </>
+  );
+}
+
+/** What's still to send: the amount only if it was never sent (resending could pay twice), and an unpaid commission. */
+function unsentParts(order: OrderView): ('payment' | 'commission')[] {
+  return [...(order.status === 'awaiting_transfer' ? (['payment'] as const) : []), ...(order.commissionPaid ? [] : (['commission'] as const))];
+}
+
+/** Sending what's left through the payer's bank, for one approval there. */
+function OneApprovalCard({ order, onChange }: StepProps) {
+  const { api, me, sandbox } = useSession();
+  const { run, busy, error } = useAction();
+  const bank = me?.bankName ?? 'your bank';
+  const request = order.bankRequest;
+  const describe = (parts: ('payment' | 'commission')[]) =>
+    parts
+      .map((part) => (part === 'payment' ? `${formatInr(order.amount)} to ${order.payee.name}` : `the ${formatInr(order.fee)} commission to ePay`))
+      .join(' and ');
+  const simulate = (outcome: 'approve' | 'decline' | 'commission_fails') =>
+    run(async () => onChange(await api.sandbox.bank(order.id, outcome)));
+
+  if (request?.status === 'pending') {
+    return (
+      <Card>
+        <Title>Approve it in {bank}</Title>
+        <Body>
+          {bank} has ePay's request to send {describe(request.parts)}. Approve it once in your bank's app or net banking.
+        </Body>
+        <View style={styles.waiting}>
+          <ActivityIndicator color={colors.blue} />
+          <Body muted>Waiting for {bank}…</Body>
+        </View>
+        {sandbox ? (
+          <>
+            <Button title="Simulate approval in bank" variant="secondary" onPress={() => simulate('approve')} busy={busy} />
+            <Button title="Simulate the commission failing" variant="link" onPress={() => simulate('commission_fails')} disabled={busy} />
+            <Button title="Simulate declining" variant="link" onPress={() => simulate('decline')} disabled={busy} />
+          </>
+        ) : null}
+        <ErrorText error={error} />
+      </Card>
+    );
+  }
+
+  // Not linked yet: offer it, if ePay can connect to their bank.
+  if (!order.oneApproval) return me?.oneApproval === 'linked' ? null : <BankLinkCard />;
+
+  const parts = unsentParts(order);
+  const total = parts.reduce((sum, part) => sum + (part === 'payment' ? order.amount : order.fee), 0);
+  return (
+    <Card>
+      <Title>Send with one approval</Title>
+      {request?.status === 'failed' ? <Banner tone="error">{bank} didn't send {describe(request.failedParts)}.</Banner> : null}
+      <Body>
+        ePay asks {bank} to send {describe(parts)}, each straight to its own account. You approve once, in your bank.
+      </Body>
+      <ErrorText error={error} />
+      <Button
+        title={`Send ${formatInr(total)} with one approval`}
+        onPress={() => run(async () => onChange(await api.bankPay(order.id)))}
+        busy={busy}
+      />
+    </Card>
   );
 }
 
@@ -320,4 +392,5 @@ const styles = StyleSheet.create({
   amount: { fontSize: 32, fontWeight: '800', color: colors.navy },
   subheading: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 4 },
   rails: { fontSize: 14, fontWeight: '600', color: colors.green },
+  waiting: { flexDirection: 'row', alignItems: 'center', gap: 12 },
 });
