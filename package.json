@@ -1,0 +1,19 @@
+{
+  "name": "upi-high-value-payments",
+  "version": "0.1.0",
+  "description": "Routes business payments above the UPI limit to net banking, bank transfer or e-NACH, with bank-verified account details",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc",
+    "demo": "node examples/demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}
