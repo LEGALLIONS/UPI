@@ -1,0 +1,20 @@
+{
+  "name": "epay",
+  "version": "0.1.0",
+  "description": "ePay: pay businesses by mobile number, above the UPI limit, through net banking, bank transfer or e-NACH",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc",
+    "server": "node server/main.ts",
+    "demo": "node examples/demo.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^5.9.3"
+  }
+}
