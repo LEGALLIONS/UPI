@@ -43,10 +43,16 @@ for (const [label, collection] of scenarios) {
   for (const option of plan.unavailable) console.log(`     ✗ ${option.method}: ${option.reason}`);
 }
 
-console.log('\n3. Customer picks net banking for the ₹3 lakh invoice');
+console.log('\n3. Customer pays a ₹3 lakh invoice to a supplier by net banking');
+const payee = {
+  id: 'cust_2',
+  name: 'Meena Steels',
+  account: { accountNumber: '00112233445566', ifsc: 'ICIC0000123', holderName: 'MEENA STEELS' },
+};
 const plan = planCollection({ amount: 3 * LAKH });
 const providers = { gateway: partner, virtualAccounts: partner, mandates: partner, accounts };
-console.log('  ', await startPayment({ orderId: 'ord_1', customer, plan, method: 'netbanking', returnUrl: 'https://example.com/paid' }, providers));
+const returnUrl = 'https://example.com/paid';
+console.log('  ', await startPayment({ orderId: 'ord_1', payer: customer, payee, plan, method: 'netbanking', returnUrl }, providers));
 
 console.log('\n4. Refund ₹12 lakh to the customer today, to the account verified in step 1');
 const payoutOptions = planPayout({ amount: 12 * LAKH, urgent: true });

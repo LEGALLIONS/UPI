@@ -53,7 +53,7 @@ export class AccountVerification {
    * for the same request, since providers retry webhooks.
    */
   async handleWebhook(rawBody: string, signature: string): Promise<VerificationOutcome> {
-    const result = await this.#provider.parseWebhook(rawBody, signature);
+    const result = await this.#provider.parsePennyDropWebhook(rawBody, signature);
     const customerId = await this.#store.findCustomerForRequest(result.requestId);
     if (!customerId) throw new Error(`No verification was started for request ${result.requestId}`);
     if (result.status === 'failed') return { customerId, verified: false, reason: result.reason };

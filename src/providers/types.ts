@@ -18,6 +18,16 @@ export interface Customer {
   mobile: string;
 }
 
+/**
+ * Who receives a payment. The partner settles straight to their verified
+ * account (split settlement / linked accounts), so the money never sits with us.
+ */
+export interface Payee {
+  id: string;
+  name: string;
+  account: VerifiedBankAccount;
+}
+
 export interface UpiPaymentRequest {
   requestId: string;
   upiIntent: string;
@@ -35,19 +45,30 @@ export type PennyDropResult =
 export interface ReversePennyDropProvider {
   createRequest(input: { referenceId: string }): Promise<UpiPaymentRequest>;
   /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
-  parseWebhook(rawBody: string, signature: string): Promise<PennyDropResult>;
+  parsePennyDropWebhook(rawBody: string, signature: string): Promise<PennyDropResult>;
+}
+
+/** What a partner's payment webhook reports. */
+export type PaymentEvent =
+  /** A UPI or net banking order finished, or an e-NACH mandate was approved or refused. */
+  | { kind: 'order'; requestId: string; status: 'success' | 'failed' }
+  /** Money arrived in a virtual account. utr is the bank's reference for the transfer. */
+  | { kind: 'transfer'; virtualAccountNumber: string; amount: Paise; utr: string };
+
+export interface OrderInput {
+  orderId: string;
+  amount: Paise;
+  payer: Customer;
+  payee: Payee;
 }
 
 export interface PaymentGateway {
-  /** UPI through the gateway, so the merchant's verified-category limits apply. */
-  createUpiOrder(input: { orderId: string; amount: Paise; customer: Customer }): Promise<UpiPaymentRequest>;
+  /** UPI through the gateway, so the payee's verified-category limits apply. */
+  createUpiOrder(input: OrderInput): Promise<UpiPaymentRequest>;
   /** The redirect goes to the payer's bank's own login page; their credentials never reach us. */
-  createNetbankingOrder(input: {
-    orderId: string;
-    amount: Paise;
-    customer: Customer;
-    returnUrl: string;
-  }): Promise<{ requestId: string; redirectUrl: string }>;
+  createNetbankingOrder(input: OrderInput & { returnUrl: string }): Promise<{ requestId: string; redirectUrl: string }>;
+  /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
+  parsePaymentWebhook(rawBody: string, signature: string): Promise<PaymentEvent>;
 }
 
 export interface VirtualAccount {
@@ -57,15 +78,19 @@ export interface VirtualAccount {
 }
 
 export interface VirtualAccountProvider {
-  /** Returns the same account each time for a customer, so their transfers match up automatically. */
-  getOrCreate(customer: Customer): Promise<VirtualAccount>;
+  /**
+   * Same account every time for a payer and payee, so the payer adds it as a
+   * beneficiary in their bank once and every transfer matches up automatically.
+   */
+  getOrCreate(input: { payer: Customer; payee: Payee }): Promise<VirtualAccount>;
 }
 
 export interface MandateProvider {
-  /** The customer approves on their bank's page; the bank then allows debits up to maxAmount. */
+  /** The payer approves on their bank's page; the bank then allows debits up to maxAmount. */
   createEnachMandate(input: {
-    customer: Customer;
-    account: VerifiedBankAccount;
+    payer: Customer;
+    payerAccount: VerifiedBankAccount;
+    payee: Payee;
     maxAmount: Paise;
     returnUrl: string;
   }): Promise<{ mandateId: string; authUrl: string }>;
