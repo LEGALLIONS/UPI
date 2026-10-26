@@ -1,9 +1,8 @@
-import * as Linking from 'expo-linking';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, StyleSheet, Switch, Text, View } from 'react-native';
-import { Body, Button, Card, ErrorText, Field, METHOD_LABELS, Screen, SectionLabel } from '../components/ui';
-import type { CollectionMethod, CollectionPlan } from '../lib/api';
+import { StyleSheet, Text, View } from 'react-native';
+import { Body, Button, Card, DetailRow, ErrorText, Field, METHOD_LABELS, Screen, SectionLabel } from '../components/ui';
+import type { PlanView } from '../lib/api';
 import { amountInWords, formatInr, parseRupees } from '../lib/money';
 import { useSession } from '../lib/session';
 import { colors, radius } from '../lib/theme';
@@ -13,34 +12,15 @@ export default function Pay() {
   const payee = useLocalSearchParams<{ payeeId: string; name: string; account: string; ifsc: string }>();
   const { api } = useSession();
   const [amountText, setAmountText] = useState('');
-  const [recurring, setRecurring] = useState(false);
-  const [plan, setPlan] = useState<CollectionPlan | null>(null);
-  const [method, setMethod] = useState<CollectionMethod | null>(null);
+  const [plan, setPlan] = useState<PlanView | null>(null);
   const { run, busy, error } = useAction();
   const amount = parseRupees(amountText);
 
-  // Any change to what's being paid means the options need working out again.
-  const resetPlan = () => {
-    setPlan(null);
-    setMethod(null);
-  };
+  const showPlan = () => run(async () => setPlan(await api.plan({ payeeId: payee.payeeId, amount: amount! })));
 
-  const showOptions = () =>
+  const start = () =>
     run(async () => {
-      const next = await api.plan({ payeeId: payee.payeeId, amount: amount!, recurring });
-      setPlan(next);
-      setMethod(next.options[0]?.method ?? null);
-    });
-
-  const pay = () =>
-    run(async () => {
-      const order = await api.pay({
-        payeeId: payee.payeeId,
-        amount: plan!.amount,
-        recurring,
-        method: method!,
-        returnUrl: Linking.createURL('payment-return'),
-      });
+      const order = await api.pay({ payeeId: payee.payeeId, amount: plan!.amount });
       router.replace(`/payment/${order.id}`);
     });
 
@@ -63,92 +43,60 @@ export default function Pay() {
         value={amountText}
         onChangeText={(text) => {
           setAmountText(text);
-          resetPlan();
+          setPlan(null);
         }}
         hint={amount ? amountInWords(amount) : undefined}
       />
 
-      <View style={styles.switchRow}>
-        <View style={styles.flex}>
-          <Text style={styles.switchLabel}>Repeats every month</Text>
-          <Body muted>Rent, EMIs, supplier bills: approve once with your bank, later debits are automatic.</Body>
-        </View>
-        <Switch
-          accessibilityLabel="Repeats every month"
-          value={recurring}
-          onValueChange={(value) => {
-            setRecurring(value);
-            resetPlan();
-          }}
-          trackColor={{ true: colors.blue }}
-        />
-      </View>
-
       {!plan ? (
-        <Button title="See payment options" onPress={showOptions} busy={busy} disabled={!amount} />
+        <>
+          <ErrorText error={error} />
+          <Button title="See how to pay" onPress={showPlan} busy={busy} disabled={!amount} />
+        </>
       ) : (
         <>
-          <SectionLabel>How do you want to pay {formatInr(plan.amount)}?</SectionLabel>
+          <SectionLabel>Ways to send it</SectionLabel>
           {plan.options.map((option) => (
             <Option
               key={option.method}
               title={METHOD_LABELS[option.method]}
               detail={option.reason}
               rails={option.rails}
-              selected={method === option.method}
-              onPress={() => setMethod(option.method)}
             />
           ))}
           {plan.unavailable.map((option) => (
             <Option key={option.method} title={METHOD_LABELS[option.method]} detail={option.reason} disabled />
           ))}
+
+          <Card>
+            <DetailRow label={`To ${payee.name}, straight to their bank`} value={formatInr(plan.amount)} />
+            <DetailRow label={`ePay fee (${plan.feePercent}%), paid first by UPI`} value={formatInr(plan.fee)} />
+            <Body muted>You'll see where to send the money as soon as the fee is paid.</Body>
+          </Card>
           <ErrorText error={error} />
-          <Button title={`Pay ${formatInr(plan.amount)}`} onPress={pay} busy={busy} disabled={!method} />
+          <Button title={`Continue: pay ${formatInr(plan.fee)} fee`} onPress={start} busy={busy} />
         </>
       )}
-      {!plan ? <ErrorText error={error} /> : null}
     </Screen>
   );
 }
 
-function Option({
-  title,
-  detail,
-  rails,
-  selected = false,
-  disabled = false,
-  onPress,
-}: {
-  title: string;
-  detail: string;
-  rails?: string[];
-  selected?: boolean;
-  disabled?: boolean;
-  onPress?: () => void;
-}) {
+function Option({ title, detail, rails, disabled = false }: { title: string; detail: string; rails?: string[]; disabled?: boolean }) {
   return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityState={{ selected, disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={[styles.option, selected && styles.optionSelected, disabled && styles.optionDisabled]}
-    >
-      <View style={[styles.radio, selected && styles.radioSelected]}>{selected ? <View style={styles.radioDot} /> : null}</View>
+    <View style={[styles.option, disabled && styles.optionDisabled]}>
+      <Text style={[styles.optionMark, disabled ? styles.textDisabled : styles.optionMarkOn]}>{disabled ? '✕' : '✓'}</Text>
       <View style={styles.flex}>
         <Text style={[styles.optionTitle, disabled && styles.textDisabled]}>{title}</Text>
         <Text style={[styles.optionDetail, disabled && styles.textDisabled]}>{detail}</Text>
         {rails?.length ? <Text style={styles.rails}>Use {rails.map((rail) => rail.toUpperCase()).join(', ')}</Text> : null}
       </View>
-    </Pressable>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   payeeName: { fontSize: 20, fontWeight: '700', color: colors.text },
-  switchRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  switchLabel: { fontSize: 15, fontWeight: '600', color: colors.text },
   option: {
     flexDirection: 'row',
     gap: 12,
@@ -158,20 +106,9 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
-  optionSelected: { borderColor: colors.blue, borderWidth: 2, padding: 13 },
   optionDisabled: { backgroundColor: colors.background },
-  radio: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    borderWidth: 2,
-    borderColor: colors.disabled,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 1,
-  },
-  radioSelected: { borderColor: colors.blue },
-  radioDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.blue },
+  optionMark: { fontSize: 18, fontWeight: '700', width: 20, textAlign: 'center' },
+  optionMarkOn: { color: colors.green },
   optionTitle: { fontSize: 16, fontWeight: '700', color: colors.text },
   optionDetail: { fontSize: 14, lineHeight: 20, color: colors.muted },
   rails: { fontSize: 13, fontWeight: '600', color: colors.green, marginTop: 4 },

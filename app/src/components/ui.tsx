@@ -171,21 +171,30 @@ export function DetailRow({
   );
 }
 
-const STATUS_LABELS: Record<OrderStatus, string> = { pending: 'Pending', completed: 'Paid', failed: 'Failed' };
+type ChipTone = 'action' | 'waiting' | 'done' | 'problem';
+type Role = 'payer' | 'payee';
 
-export function StatusChip({ status }: { status: OrderStatus }) {
+// What each step means to the person looking: something for them to do, or for the other side.
+const STATUS_CHIPS: Record<OrderStatus, Record<Role, [label: string, tone: ChipTone]>> = {
+  awaiting_fee: { payer: ['Pay fee', 'action'], payee: ['Not sent yet', 'waiting'] },
+  awaiting_transfer: { payer: ['Send now', 'action'], payee: ['Not sent yet', 'waiting'] },
+  sent: { payer: ['Awaiting confirmation', 'waiting'], payee: ['Confirm receipt', 'action'] },
+  received: { payer: ['Paid', 'done'], payee: ['Received', 'done'] },
+  not_received: { payer: ['Not received', 'problem'], payee: ['Not received', 'problem'] },
+};
+
+export function StatusChip({ status, role }: { status: OrderStatus; role: Role }) {
+  const [label, tone] = STATUS_CHIPS[status][role];
   return (
-    <View style={[styles.chip, styles[`chip_${status}`]]}>
-      <Text style={[styles.chipText, styles[`chipText_${status}`]]}>{STATUS_LABELS[status]}</Text>
+    <View style={[styles.chip, styles[`chip_${tone}`]]}>
+      <Text style={[styles.chipText, styles[`chipText_${tone}`]]}>{label}</Text>
     </View>
   );
 }
 
 export const METHOD_LABELS: Record<CollectionMethod, string> = {
   upi: 'UPI',
-  netbanking: 'Net banking',
   bank_transfer: 'Bank transfer',
-  enach: 'e-NACH mandate',
 };
 
 export function Loading() {
@@ -251,11 +260,13 @@ const styles = StyleSheet.create({
   copy: { fontSize: 15, fontWeight: '600', color: colors.blue },
 
   chip: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
-  chip_pending: { backgroundColor: colors.warningBg },
-  chip_completed: { backgroundColor: colors.successBg },
-  chip_failed: { backgroundColor: colors.errorBg },
+  chip_action: { backgroundColor: colors.infoBg },
+  chip_waiting: { backgroundColor: colors.warningBg },
+  chip_done: { backgroundColor: colors.successBg },
+  chip_problem: { backgroundColor: colors.errorBg },
   chipText: { fontSize: 13, fontWeight: '600' },
-  chipText_pending: { color: colors.warningText },
-  chipText_completed: { color: colors.green },
-  chipText_failed: { color: colors.error },
+  chipText_action: { color: colors.blue },
+  chipText_waiting: { color: colors.warningText },
+  chipText_done: { color: colors.green },
+  chipText_problem: { color: colors.error },
 });

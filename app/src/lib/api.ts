@@ -7,8 +7,8 @@ import type {
   PayeeView,
   PaymentRequest,
   PlanRequest,
+  PlanView,
   SessionResponse,
-  CollectionPlan,
   UpiPaymentRequest,
 } from '../../../server/api-types.ts';
 
@@ -57,15 +57,21 @@ export function createApi(token: string | null) {
     me: () => request<MeView>('GET', '/me', token),
     startVerification: () => request<UpiPaymentRequest>('POST', '/me/verification', token),
     findPayee: (mobile: string) => request<PayeeView>('GET', `/payees/${encodeURIComponent(mobile)}`, token),
-    plan: (body: PlanRequest) => request<CollectionPlan>('POST', '/payments/plan', token, body),
+    plan: (body: PlanRequest) => request<PlanView>('POST', '/payments/plan', token, body),
     pay: (body: PaymentRequest) => request<OrderView>('POST', '/payments', token, body),
     payments: () => request<OrderView[]>('GET', '/payments', token),
     payment: (id: string) => request<OrderView>('GET', `/payments/${encodeURIComponent(id)}`, token),
+    /** A fresh fee request, after the last one failed. */
+    retryFee: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/fee`, token, {}),
+    markSent: (id: string, utr: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, { utr }),
+    markReceived: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/received`, token, {}),
+    markNotReceived: (id: string) =>
+      request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/not-received`, token, {}),
     sandbox: {
       pennyDrop: (requestId: string, holderName: string) =>
         request<MeView>('POST', '/sandbox/penny-drop', token, { requestId, holderName }),
-      complete: (orderId: string, status: 'success' | 'failed') =>
-        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/complete`, token, { status }),
+      payFee: (orderId: string, status: 'success' | 'failed') =>
+        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/fee`, token, { status }),
     },
   };
 }

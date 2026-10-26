@@ -97,6 +97,8 @@ export interface OrderView {
   feeFailed: boolean;
   /** Payer only, once the fee is paid: where to send the money. */
   instructions: PaymentInstructions | null;
+  /** Short code the payer puts in the transfer's remarks, for the payee to spot in their statement. */
+  reference: string;
   /** The bank's reference for the transfer, as the payer gave it. */
   utr: string | null;
   createdAt: string;

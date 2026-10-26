@@ -102,6 +102,7 @@ describe('ePay API (sandbox)', () => {
     assert.equal(asPayee.body.role, 'payee');
     assert.equal(asPayee.body.feeRequest, null);
     assert.equal(asPayee.body.payer.name, 'ARUN TRADERS');
+    assert.match(asPayee.body.reference, /^EPAY[A-Z0-9]{8}$/);
 
     const feePaid = await call<OrderView>('POST', `/sandbox/payments/${order.id}/fee`, { token: payer, body: {} });
     assert.equal(feePaid.body.status, 'awaiting_transfer');

@@ -137,6 +137,7 @@ export function createApiServer(deps: ApiDeps): Server {
       feeRequest: role === 'payer' && !feePaid ? order.feeRequest : null,
       feeFailed: order.feeFailed,
       instructions: role === 'payer' && feePaid ? order.instructions : null,
+      reference: order.instructions.reference,
       utr: order.utr,
       createdAt: order.createdAt.toISOString(),
     };
