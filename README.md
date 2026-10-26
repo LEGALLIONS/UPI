@@ -4,19 +4,20 @@ A mobile app for paying businesses by mobile number, above the ₹1 lakh UPI lim
 
 UPI stops at ₹1 lakh a day for most payments, and businesses often need to pay far more. ePay keeps UPI where it fits and uses bank transfer (IMPS, RTGS or NEFT) above that. Either way, the money goes **straight from the payer's bank to the payee's bank**. ePay never holds it, so there is no gateway settlement wait, and the payee has it in seconds. ePay never asks for a net banking password, and nobody types an account number.
 
-ePay earns a **0.2% fee** on each payment, which the payer pays by UPI into ePay's own account before sending the main amount.
+ePay earns a **0.2% commission** on each payment, on top of the amount. The payer sends it **at the same time** as the payment, straight into ePay's own permanent account: the amount goes to the payee's account, the commission to ePay's.
 
 ## How it works
 
 1. **Sign in** with mobile number and OTP.
 2. **Verify your bank account** by paying ₹1 by UPI. The bank reports the account number, IFSC, name and UPI ID the ₹1 came from (a *reverse penny drop*), and the ₹1 is refunded. Because these come from the bank, nobody can pass themselves off as another business, and payments to you land in the right account.
 3. **Find who to pay** by their mobile number. Only verified ePay users show up, with their name as their bank has it.
-4. **Enter the amount.** ePay shows the ways to send it and its fee (0.2%, at least ₹1).
-5. **Pay the fee** by UPI. Once it's confirmed, ePay shows where to send the money:
-   - **UPI** straight to the payee's own UPI ID, while it's within the limit
-   - **Bank transfer** from your bank app or net banking straight to the payee's verified account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT
-6. **Send it, and enter the bank reference** (UTR or UPI Ref No.) your bank shows.
+4. **Enter the amount.** ePay shows the total: the amount, plus its commission (0.2%, at least ₹1).
+5. **Send both, at the same time and in either order.** ePay shows two transfers on one screen, each with a UPI button where UPI fits and bank details to copy:
+   - **The amount** straight to the payee's verified UPI ID (within the UPI limit) or account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT
+   - **The commission** straight to ePay's permanent account, with the payment's reference (e.g. `EPAY2C76CDDE`) in the remarks. The account never changes, so payers add it as a beneficiary once.
+6. **Enter the bank reference** (UTR or UPI Ref No.) of the amount.
 7. **The payee confirms** in the app that it arrived. If it hasn't, they tap "Not received yet" and the payer checks with their bank.
+8. **ePay's bank reports the commission** arriving, and ePay matches it to the payment by the reference. Until it arrives, the payer can't start another payment.
 
 ## What's in the repo
 
@@ -24,12 +25,12 @@ ePay earns a **0.2% fee** on each payment, which the payer pays by UPI into ePay
 |---|---|
 | `app/` | The ePay mobile app (React Native with Expo, Android and iOS) |
 | `server/` | The API the app talks to. It holds the partner API keys, which must never be in the app |
-| `src/` | Payment logic: limits, choosing how to send, the fee, account verification, partner interfaces |
+| `src/` | Payment logic: limits, choosing how to send, the commission, account verification, partner interfaces |
 | `test/` | Tests for the server and payment logic |
 
 ## Try it on your phone
 
-Both run in **sandbox mode**: no real money moves, and each step that would involve a bank has a "Simulate" button. When asked for a bank reference, type any 12 digits.
+Both run in **sandbox mode**: no real money moves, and each step that would involve a bank has a "Simulate" button. When asked for a bank reference, type any 12 digits. Commissions go to a pretend ePay account until you set your own (see below).
 
 You need Node 22.18 or later, and the free **Expo Go** app on your phone (Play Store or App Store). Your phone and computer must be on the same Wi-Fi.
 
@@ -75,7 +76,7 @@ To update the app, run the workflow again and install the new APK over the old o
 | RTGS | From ₹2L, no maximum | Real time |
 | NEFT | No maximum | Half-hourly batches |
 
-The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers, so check the current NPCI circulars before launch. The fee rate is in `src/fees.ts`.
+The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers, so check the current NPCI circulars before launch. The commission rate is in `src/fees.ts`.
 
 ## Development
 
@@ -93,14 +94,15 @@ npm run typecheck
 
 ## What's real and what's a placeholder
 
-- **Real:** the app's screens and flows, choosing how to send, the limits, the fee, sign-in with OTP and sessions, account and UPI ID verification, payee lookup, the fee confirmed by signed webhook (with retries, and a late payment of an earlier fee request still counted), and the sent/received confirmation between payer and payee.
-- **Placeholder:** `src/providers/sandbox.ts` stands in for a licensed partner and moves no money. `src/providers/types.ts` lists the two partner APIs ePay needs: reverse penny drop (Cashfree, Setu, Decentro and others) and UPI collection for the fee (any payment gateway). Write one adapter per partner and use it in place of `SandboxPartner`.
+- **Real:** the app's screens and flows, choosing how to send, the limits, the commission, sign-in with OTP and sessions, account and UPI ID verification, payee lookup, matching commission credits to payments by reference (from signed credit notices, each bank reference counted once), blocking new payments while a commission is owed, and the sent/received confirmation between payer and payee.
+- **Placeholder:** `src/providers/sandbox.ts` stands in for partners and moves no money. `src/providers/types.ts` lists the two APIs ePay needs: reverse penny drop (Cashfree, Setu, Decentro and others) and credit notifications from ePay's own bank (API banking). Write one adapter for each and use it in place of `SandboxPartner`.
 - **Not included yet:** a database (`server/store.ts` keeps everything in memory, so a restart loses it), SMS sending for OTPs (`OtpSender` in `server/auth.ts`), push notifications (so the payee hears about a payment without opening the app), and automatic confirmation of transfers (see below).
 
 ## Before going live
 
-- **Partner for the fee:** sign up with a payment gateway (Razorpay, Cashfree, PayU…) to collect the fee by UPI into ePay's account. Its settlement time only affects when *you* get your fees, not when payees get paid.
-- **GST:** if ePay is GST-registered, its fee is a taxable service (usually 18%). Decide whether 0.2% includes GST or GST is added on top, and show it on the fee screen.
+- **Your commission account:** set `EPAY_ACCOUNT_NUMBER`, `EPAY_IFSC`, `EPAY_ACCOUNT_NAME` and `EPAY_UPI_ID` on the server (on Render: the service's **Environment** page). Use a current account with a business UPI ID, so its UPI link can carry the payment reference.
+- **Commission notifications:** ask your bank for API banking credit notifications (or a statement API) on that account, and point them at `/webhooks/commission`. Until then, commissions can't be confirmed automatically. A credit without the reference in its remarks is logged for a person to match.
+- **GST:** if ePay is GST-registered, its commission is a taxable service (usually 18%). Decide whether 0.2% includes GST or GST is added on top, and show it on the pay screen.
 - **Automatic confirmation:** today the payee confirms receipt by hand. To confirm automatically, sign API banking agreements with banks (ICICI, HDFC, Axis, Kotak and others offer them). With a payee's consent, their bank can notify ePay of incoming credits; with a payer's, ePay can start the transfer from their account for one-tap payments.
 - **Disputes:** payments go bank to bank, so a payment marked "Not received" is settled between payer and payee with their banks. Keep the UTRs, and have a support contact for these cases.
 - **UPI to personal UPI IDs:** some UPI apps restrict payment links that pay a person rather than a merchant. If that happens, bank transfer always works; payees with a business (merchant) UPI ID avoid it.

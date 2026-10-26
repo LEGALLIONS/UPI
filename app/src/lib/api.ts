@@ -61,8 +61,6 @@ export function createApi(token: string | null) {
     pay: (body: PaymentRequest) => request<OrderView>('POST', '/payments', token, body),
     payments: () => request<OrderView[]>('GET', '/payments', token),
     payment: (id: string) => request<OrderView>('GET', `/payments/${encodeURIComponent(id)}`, token),
-    /** A fresh fee request, after the last one failed. */
-    retryFee: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/fee`, token, {}),
     markSent: (id: string, utr: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, { utr }),
     markReceived: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/received`, token, {}),
     markNotReceived: (id: string) =>
@@ -70,8 +68,9 @@ export function createApi(token: string | null) {
     sandbox: {
       pennyDrop: (requestId: string, holderName: string) =>
         request<MeView>('POST', '/sandbox/penny-drop', token, { requestId, holderName }),
-      payFee: (orderId: string, status: 'success' | 'failed') =>
-        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/fee`, token, { status }),
+      /** As if ePay's bank reported the commission arriving. */
+      payCommission: (orderId: string) =>
+        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/commission`, token, {}),
     },
   };
 }

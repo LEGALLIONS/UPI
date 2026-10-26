@@ -107,7 +107,7 @@ export default function Home() {
               </View>
               <View style={styles.rowEnd}>
                 <Text style={styles.rowAmount}>{formatInr(order.amount)}</Text>
-                <StatusChip status={order.status} role={order.role} />
+                <StatusChip status={order.status} role={order.role} commissionDue={isCommissionDue(order)} />
               </View>
             </Pressable>
           ))}
@@ -115,6 +115,10 @@ export default function Home() {
       )}
     </Screen>
   );
+}
+
+function isCommissionDue(order: OrderView): boolean {
+  return order.commissionPaid === false && order.status !== 'awaiting_transfer';
 }
 
 const styles = StyleSheet.create({

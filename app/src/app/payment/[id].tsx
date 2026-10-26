@@ -1,8 +1,8 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useState, type ReactNode } from 'react';
 import { StyleSheet, Text } from 'react-native';
 import { Banner, Body, Button, Card, DetailRow, ErrorText, Field, Loading, Screen, StatusChip, Title } from '../../components/ui';
-import type { OrderView } from '../../lib/api';
+import type { OrderView, PaymentInstructions } from '../../lib/api';
 import { amountInWords, formatInr } from '../../lib/money';
 import { useSession } from '../../lib/session';
 import { colors } from '../../lib/theme';
@@ -11,14 +11,16 @@ import { useAction } from '../../lib/use-action';
 
 const POLL_MS = 3000;
 
+type TransferDetails = PaymentInstructions['payment'];
+
 export default function Payment() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { api } = useSession();
   const [order, setOrder] = useState<OrderView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // The fee is confirmed by webhook and the other side acts on their own phone,
-  // so keep checking while this screen is open and the payment isn't finished.
+  // The commission is confirmed by ePay's bank and the other side acts on their
+  // own phone, so keep checking while this screen is open and anything is open.
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -29,7 +31,7 @@ export default function Payment() {
           if (!active) return;
           setOrder(latest);
           setLoadError(null);
-          if (latest.status !== 'received') timer = setTimeout(poll, POLL_MS);
+          if (latest.status !== 'received' || latest.commissionPaid === false) timer = setTimeout(poll, POLL_MS);
         } catch (caught) {
           if (!active) return;
           setLoadError(caught instanceof Error ? caught.message : String(caught));
@@ -56,6 +58,7 @@ export default function Payment() {
 
   const isPayer = order.role === 'payer';
   const otherName = isPayer ? order.payee.name : order.payer.name;
+  const commissionDue = order.commissionPaid === false && order.status !== 'awaiting_transfer';
 
   return (
     <Screen>
@@ -65,7 +68,7 @@ export default function Payment() {
         </Body>
         <Text style={styles.amount}>{formatInr(order.amount)}</Text>
         <Body muted>{amountInWords(order.amount)}</Body>
-        <StatusChip status={order.status} role={order.role} />
+        <StatusChip status={order.status} role={order.role} commissionDue={commissionDue} />
       </Card>
 
       {isPayer ? <PayerStep order={order} onChange={setOrder} /> : <PayeeStep order={order} onChange={setOrder} />}
@@ -74,12 +77,12 @@ export default function Payment() {
       <Card>
         <DetailRow label={isPayer ? 'To' : 'From'} value={otherName} />
         {isPayer ? <DetailRow label="Their account" value={`${order.payee.maskedAccountNumber} · ${order.payee.ifsc}`} /> : null}
-        {isPayer ? <DetailRow label="ePay fee" value={formatInr(order.fee)} /> : null}
+        {isPayer ? <DetailRow label="ePay commission" value={formatInr(order.fee)} /> : null}
         <DetailRow label="Reference" value={order.reference} />
         {order.utr ? <DetailRow label="Bank reference (UTR)" value={order.utr} copyable /> : null}
       </Card>
 
-      {order.status === 'received' ? (
+      {order.status === 'received' && !commissionDue ? (
         <Button title="Back to home" variant="secondary" onPress={() => router.dismissTo('/')} />
       ) : null}
     </Screen>
@@ -92,106 +95,176 @@ interface StepProps {
 }
 
 function PayerStep({ order, onChange }: StepProps) {
-  const { api, sandbox } = useSession();
+  const { api } = useSession();
   const { run, busy, error } = useAction();
   const [utr, setUtr] = useState('');
+  const { instructions } = order;
+  if (!instructions) return null;
   const payee = order.payee.name;
+  const sending = order.status === 'awaiting_transfer' || order.status === 'not_received';
 
-  switch (order.status) {
-    case 'awaiting_fee': {
-      const feeRequest = order.feeRequest;
-      return (
-        <Card>
-          <Title>Step 1 of 2: ePay fee</Title>
-          <Body>
-            Pay ePay's fee of {formatInr(order.fee)} by UPI. As soon as it's confirmed, you'll see where to send the{' '}
-            {formatInr(order.amount)}.
-          </Body>
-          {order.feeFailed ? (
-            <>
-              <Banner tone="error">The fee payment didn't go through. No money was taken for it.</Banner>
-              <Button title="Try again" onPress={() => run(async () => onChange(await api.retryFee(order.id)))} busy={busy} />
-            </>
-          ) : sandbox ? (
-            <>
-              <Banner tone="warning">Sandbox: no UPI app opens and no money moves.</Banner>
-              <Button title="Simulate fee payment" onPress={() => run(async () => onChange(await api.sandbox.payFee(order.id, 'success')))} busy={busy} />
-              <Button
-                title="Simulate a failed fee payment"
-                variant="link"
-                onPress={() => run(async () => onChange(await api.sandbox.payFee(order.id, 'failed')))}
-                disabled={busy}
-              />
-            </>
-          ) : feeRequest ? (
-            <Button title={`Pay ${formatInr(order.fee)} fee with UPI`} onPress={() => run(() => openUpiApp(feeRequest.upiIntent))} busy={busy} />
+  const commission = (
+    <CommissionCard
+      order={order}
+      details={instructions.commission}
+      reference={instructions.reference}
+      onChange={onChange}
+      numbered={sending}
+    />
+  );
+
+  if (!sending) {
+    return (
+      <>
+        {order.status === 'sent' ? (
+          <Banner tone="info">Waiting for {payee} to confirm the money has arrived in their account.</Banner>
+        ) : (
+          <Banner tone="success">{payee} confirmed they received it.</Banner>
+        )}
+        {order.commissionPaid ? null : (
+          <>
+            <Banner tone="warning">
+              ePay hasn't received the {formatInr(order.fee)} commission yet. You can start your next payment once it arrives.
+            </Banner>
+            {commission}
+          </>
+        )}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {order.status === 'not_received' ? (
+        <Banner tone="error">
+          {payee} says the money hasn't arrived. Check with your bank, then enter the reference again once it has gone.
+        </Banner>
+      ) : null}
+      <Card>
+        <Title>Send these two payments</Title>
+        <Body>
+          Send both now, in whichever order you like: {formatInr(order.amount + order.fee)} in total. Each goes straight to
+          its own bank account.
+        </Body>
+      </Card>
+
+      <TransferCard
+        title={`1. ${formatInr(order.amount)} to ${payee}`}
+        details={instructions.payment}
+        reference={instructions.reference}
+      >
+        <Banner tone="info">
+          Many banks cap what you can send to a new beneficiary in the first day. Check your bank's limit before a large first
+          payment.
+        </Banner>
+      </TransferCard>
+
+      {commission}
+
+      <Card>
+        <Title>After sending the {formatInr(order.amount)}</Title>
+        <Field
+          label="Its bank reference (UTR or UPI Ref No.)"
+          hint="Your bank app shows it once the money has gone. Sandbox: type any 12 digits."
+          autoCapitalize="characters"
+          autoCorrect={false}
+          maxLength={26}
+          value={utr}
+          onChangeText={setUtr}
+        />
+        <ErrorText error={error} />
+        <Button
+          title="I've sent it"
+          onPress={() => run(async () => onChange(await api.markSent(order.id, utr)))}
+          busy={busy}
+          disabled={utr.replace(/\s/g, '').length < 12}
+        />
+      </Card>
+    </>
+  );
+}
+
+function CommissionCard({
+  order,
+  details,
+  reference,
+  onChange,
+  numbered,
+}: StepProps & { details: TransferDetails; reference: string; numbered: boolean }) {
+  const { api, sandbox } = useSession();
+  const { run, busy, error } = useAction();
+  return (
+    <TransferCard
+      title={`${numbered ? '2. ' : ''}${formatInr(order.fee)} commission to ePay`}
+      details={details}
+      reference={reference}
+      done={order.commissionPaid === true}
+      doneLabel="ePay has received it"
+    >
+      {order.commissionPaid ? null : (
+        <>
+          <Body muted>ePay's account never changes, so add it as a beneficiary once. Keep the reference in the remarks.</Body>
+          {sandbox ? (
+            <Button
+              title="Simulate commission received"
+              variant="secondary"
+              onPress={() => run(async () => onChange(await api.sandbox.payCommission(order.id)))}
+              busy={busy}
+            />
           ) : null}
           <ErrorText error={error} />
-        </Card>
-      );
-    }
-
-    case 'awaiting_transfer':
-    case 'not_received': {
-      const instructions = order.instructions;
-      if (!instructions) return null;
-      const { bankTransfer } = instructions;
-      return (
-        <>
-          {order.status === 'not_received' ? (
-            <Banner tone="error">
-              {payee} says the money hasn't arrived. Check with your bank, then enter the reference again once it has gone.
-            </Banner>
-          ) : null}
-          <Card>
-            <Title>Step 2 of 2: send it to {payee}</Title>
-            <Body>The money goes straight from your bank to theirs, and arrives in seconds.</Body>
-            {instructions.upiIntent && !sandbox ? (
-              <Button title={`Pay ${formatInr(order.amount)} with UPI`} onPress={() => run(() => openUpiApp(instructions.upiIntent!))} />
-            ) : null}
-            <Text style={styles.subheading}>{instructions.upiIntent ? 'Or by bank transfer' : 'By bank transfer'}</Text>
-            <Body muted>From your bank app or net banking:</Body>
-            <DetailRow label="Account number" value={bankTransfer.accountNumber} copyable />
-            <DetailRow label="IFSC" value={bankTransfer.ifsc} copyable />
-            <DetailRow label="Name" value={bankTransfer.beneficiaryName} copyable />
-            <DetailRow label="Amount" value={formatInr(order.amount)} copyable copyValue={(order.amount / 100).toFixed(2)} />
-            <DetailRow label="Remarks" value={instructions.reference} copyable />
-            {bankTransfer.rails.length ? (
-              <Text style={styles.rails}>Use {bankTransfer.rails.map((rail) => rail.toUpperCase()).join(', ')}</Text>
-            ) : null}
-            <Banner tone="info">
-              Many banks cap what you can send to a new beneficiary in the first day. Check your bank's limit before a large first payment.
-            </Banner>
-          </Card>
-          <Card>
-            <Title>After you've sent it</Title>
-            <Field
-              label="Bank reference (UTR or UPI Ref No.)"
-              hint={sandbox ? 'Sandbox: type any 12 digits.' : 'Your bank app shows it once the money has gone.'}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              maxLength={26}
-              value={utr}
-              onChangeText={setUtr}
-            />
-            <ErrorText error={error} />
-            <Button
-              title="I've sent it"
-              onPress={() => run(async () => onChange(await api.markSent(order.id, utr)))}
-              busy={busy}
-              disabled={utr.replace(/\s/g, '').length < 12}
-            />
-          </Card>
         </>
-      );
-    }
+      )}
+    </TransferCard>
+  );
+}
 
-    case 'sent':
-      return <Banner tone="info">Waiting for {payee} to confirm the money has arrived in their account.</Banner>;
-
-    case 'received':
-      return <Banner tone="success">{payee} confirmed they received it. Done.</Banner>;
-  }
+/** One transfer: a UPI button when it fits, and the bank details to copy. */
+function TransferCard({
+  title,
+  details,
+  reference,
+  done = false,
+  doneLabel,
+  children,
+}: {
+  title: string;
+  details: TransferDetails;
+  reference: string;
+  done?: boolean;
+  doneLabel?: string;
+  children?: ReactNode;
+}) {
+  const { sandbox } = useSession();
+  const { run, error } = useAction();
+  const { bankTransfer, upiIntent } = details;
+  // The sandbox's UPI IDs aren't real, so it offers bank details only.
+  const showUpi = Boolean(upiIntent) && !sandbox;
+  return (
+    <Card>
+      <Title>{title}</Title>
+      {done ? (
+        <Banner tone="success">✓ {doneLabel}</Banner>
+      ) : (
+        <>
+          {showUpi ? (
+            <Button title={`Pay ${formatInr(details.amount)} with UPI`} onPress={() => run(() => openUpiApp(upiIntent!))} />
+          ) : null}
+          <Text style={styles.subheading}>{showUpi ? 'Or by bank transfer' : 'By bank transfer'}</Text>
+          <DetailRow label="Account number" value={bankTransfer.accountNumber} copyable />
+          <DetailRow label="IFSC" value={bankTransfer.ifsc} copyable />
+          <DetailRow label="Name" value={bankTransfer.beneficiaryName} copyable />
+          <DetailRow label="Amount" value={formatInr(details.amount)} copyable copyValue={(details.amount / 100).toFixed(2)} />
+          <DetailRow label="Remarks" value={reference} copyable />
+          {bankTransfer.rails.length ? (
+            <Text style={styles.rails}>Use {bankTransfer.rails.map((rail) => rail.toUpperCase()).join(', ')}</Text>
+          ) : null}
+          <ErrorText error={error} />
+          {children}
+        </>
+      )}
+    </Card>
+  );
 }
 
 function PayeeStep({ order, onChange }: StepProps) {
@@ -201,7 +274,6 @@ function PayeeStep({ order, onChange }: StepProps) {
   const confirm = () => run(async () => onChange(await api.markReceived(order.id)));
 
   switch (order.status) {
-    case 'awaiting_fee':
     case 'awaiting_transfer':
       return (
         <Banner tone="info">
@@ -246,6 +318,6 @@ function PayeeStep({ order, onChange }: StepProps) {
 const styles = StyleSheet.create({
   summary: { alignItems: 'center' },
   amount: { fontSize: 32, fontWeight: '800', color: colors.navy },
-  subheading: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 8 },
+  subheading: { fontSize: 16, fontWeight: '700', color: colors.text, marginTop: 4 },
   rails: { fontSize: 14, fontWeight: '600', color: colors.green },
 });

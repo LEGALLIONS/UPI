@@ -69,12 +69,14 @@ export default function Pay() {
           ))}
 
           <Card>
+            <Text style={styles.totalLabel}>You pay in total</Text>
+            <Text style={styles.total}>{formatInr(plan.amount + plan.fee)}</Text>
             <DetailRow label={`To ${payee.name}, straight to their bank`} value={formatInr(plan.amount)} />
-            <DetailRow label={`ePay fee (${plan.feePercent}%), paid first by UPI`} value={formatInr(plan.fee)} />
-            <Body muted>You'll see where to send the money as soon as the fee is paid.</Body>
+            <DetailRow label={`ePay commission (${plan.feePercent}%), to ePay's account`} value={formatInr(plan.fee)} />
+            <Body muted>Two transfers, sent at the same time in whichever order you like.</Body>
           </Card>
           <ErrorText error={error} />
-          <Button title={`Continue: pay ${formatInr(plan.fee)} fee`} onPress={start} busy={busy} />
+          <Button title="Continue" onPress={start} busy={busy} />
         </>
       )}
     </Screen>
@@ -97,6 +99,8 @@ function Option({ title, detail, rails, disabled = false }: { title: string; det
 const styles = StyleSheet.create({
   flex: { flex: 1 },
   payeeName: { fontSize: 20, fontWeight: '700', color: colors.text },
+  totalLabel: { fontSize: 14, color: colors.muted },
+  total: { fontSize: 26, fontWeight: '800', color: colors.navy },
   option: {
     flexDirection: 'row',
     gap: 12,
