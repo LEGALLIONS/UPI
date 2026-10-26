@@ -3,8 +3,9 @@ import type { TransferRail } from '../router.ts';
 
 // What ePay needs from partners. Payments go straight from the payer's bank to
 // the payee's, and the commission straight to ePay's own account, so ePay only
-// needs account verification (Cashfree, Setu, Decentro and others offer it) and
-// credit notifications from its own bank (API banking).
+// needs account verification (Cashfree, Setu, Decentro and others offer it),
+// credit notifications from its own bank, and, for payments with one approval,
+// API banking with the payer's bank.
 
 /** Account details reported by the bank itself, never typed in by the customer. */
 export interface VerifiedBankAccount {
@@ -72,13 +73,38 @@ export interface CreditNotifications {
   parseCreditWebhook(rawBody: string, signature: string): Promise<CreditEvent>;
 }
 
-/** Sends money from a business's own current account through its bank's API (connected banking). */
-export interface PayoutProvider {
-  send(input: {
-    payoutId: string;
-    amount: Paise;
-    rail: TransferRail;
-    beneficiary: VerifiedBankAccount;
-    narration: string;
-  }): Promise<{ providerRef: string; status: 'queued' | 'processing' }>;
+/** One part of a split payment: the amount to the payee, or the commission to ePay. */
+export interface SplitLeg {
+  part: 'payment' | 'commission';
+  amount: Paise;
+  rail: TransferRail;
+  beneficiary: { accountNumber: string; ifsc: string; name: string };
+  /** Goes in the transfer's remarks. */
+  reference: string;
+}
+
+/** What the payer's bank reports back. */
+export type BankEvent =
+  | { kind: 'link'; linkId: string; status: 'approved' | 'declined' }
+  | {
+      kind: 'split';
+      requestId: string;
+      /** Each part's outcome; utr is the bank's reference when it went through. */
+      legs: { part: SplitLeg['part']; status: 'success' | 'failed'; utr: string | null }[];
+    };
+
+/**
+ * A payer's current account connected to ePay through their bank's API
+ * (connected banking). ePay asks the bank to send both parts of a payment;
+ * the payer approves once, in their bank's app or net banking.
+ */
+export interface ConnectedBanking {
+  /** Whether ePay has an API agreement with this account's bank. */
+  supports(ifsc: string): boolean;
+  /** The payer approves ePay in their bank's net banking, once; the result comes by webhook. */
+  startLink(input: { customerId: string; account: VerifiedBankAccount }): Promise<{ linkId: string }>;
+  /** Puts both parts to the payer's bank for one approval; the outcome comes by webhook. */
+  requestSplitPayment(input: { linkId: string; legs: SplitLeg[] }): Promise<{ requestId: string }>;
+  /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
+  parseBankWebhook(rawBody: string, signature: string): Promise<BankEvent>;
 }

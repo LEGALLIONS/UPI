@@ -1,6 +1,6 @@
 import { DEFAULT_LIMITS, type RailLimits } from './limits.ts';
 import type { Paise } from './money.ts';
-import type { CommissionAccount, Payee } from './providers/types.ts';
+import type { CommissionAccount, Payee, SplitLeg } from './providers/types.ts';
 import { planPayout, type CollectionPlan, type TransferRail } from './router.ts';
 import { buildUpiIntent } from './upi-intent.ts';
 
@@ -78,4 +78,20 @@ export function paymentInstructions(
       },
     },
   };
+}
+
+/** The parts still to send, as legs for the payer's bank, each on the fastest rail that fits. */
+export function splitLegs(instructions: PaymentInstructions, parts: SplitLeg['part'][]): SplitLeg[] {
+  return parts.map((part) => {
+    const { amount, bankTransfer } = instructions[part];
+    const rail = bankTransfer.rails[0];
+    if (!rail) throw new Error(`No bank transfer rail for the ${part}`);
+    return {
+      part,
+      amount,
+      rail,
+      beneficiary: { accountNumber: bankTransfer.accountNumber, ifsc: bankTransfer.ifsc, name: bankTransfer.beneficiaryName },
+      reference: instructions.reference,
+    };
+  });
 }

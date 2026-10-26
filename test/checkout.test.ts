@@ -3,6 +3,7 @@ import { describe, it } from 'node:test';
 import {
   CRORE,
   LAKH,
+  bankName,
   buildUpiIntent,
   feeFor,
   feePercent,
@@ -10,6 +11,7 @@ import {
   paymentInstructions,
   planCollection,
   rupees,
+  splitLegs,
   toRupeeString,
 } from '../src/index.ts';
 
@@ -56,6 +58,41 @@ describe('paymentInstructions', () => {
     assert.equal(instructions.commission.amount, rupees(1_20_000));
     assert.equal(instructions.commission.upiIntent, null);
     assert.deepEqual(instructions.commission.bankTransfer.rails, ['imps', 'neft']);
+  });
+});
+
+describe('splitLegs', () => {
+  it("puts both parts to the payer's bank on the fastest rail, with the reference", () => {
+    const plan = planCollection({ amount: 10 * LAKH });
+    const instructions = paymentInstructions({ orderId, payee, plan, fee: feeFor(plan.amount), commissionAccount });
+    assert.deepEqual(splitLegs(instructions, ['payment', 'commission']), [
+      {
+        part: 'payment',
+        amount: 10 * LAKH,
+        rail: 'rtgs',
+        beneficiary: { accountNumber: '00112233445566', ifsc: 'ICIC0000123', name: 'MEENA STEELS' },
+        reference: 'EPAYCD34EF56',
+      },
+      {
+        part: 'commission',
+        amount: rupees(2_000),
+        rail: 'imps',
+        beneficiary: { accountNumber: '777705550001', ifsc: 'ICIC0000001', name: 'EPAY TECHNOLOGIES' },
+        reference: 'EPAYCD34EF56',
+      },
+    ]);
+    assert.deepEqual(
+      splitLegs(instructions, ['commission']).map((leg) => leg.part),
+      ['commission'],
+    );
+  });
+});
+
+describe('bankName', () => {
+  it('names the bank from the IFSC', () => {
+    assert.equal(bankName('HDFC0001234'), 'HDFC Bank');
+    assert.equal(bankName('utib0000001'), 'Axis Bank');
+    assert.equal(bankName('ABCD0000001'), null);
   });
 });
 

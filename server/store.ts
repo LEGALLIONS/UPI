@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { PaymentInstructions } from '../src/checkout.ts';
 import type { UpiMerchantCategory } from '../src/limits.ts';
 import type { Paise } from '../src/money.ts';
+import type { SplitLeg } from '../src/providers/types.ts';
 import type { OrderStatus } from './api-types.ts';
 
 // In-memory storage, so the server runs with nothing else installed.
@@ -12,6 +13,17 @@ export interface User {
   mobile: string;
   /** Set after business verification (KYB), when NPCI allows the payee higher UPI limits. */
   merchantCategory?: UpiMerchantCategory;
+  /** Their current account connected to ePay through their bank's API, for one-approval payments. */
+  bankLink?: { linkId: string; status: 'pending' | 'linked' | 'declined' };
+}
+
+/** Both parts put to the payer's bank for one approval. */
+export interface BankRequest {
+  requestId: string;
+  parts: SplitLeg['part'][];
+  status: 'pending' | 'done' | 'failed';
+  /** Parts the bank couldn't send; the payer sends them again or by hand. */
+  failedParts: SplitLeg['part'][];
 }
 
 export interface Order {
@@ -21,6 +33,9 @@ export interface Order {
   amount: Paise;
   fee: Paise;
   commissionPaid: boolean;
+  /** The bank's reference for the commission, once it's known. */
+  commissionUtr: string | null;
+  bankRequest: BankRequest | null;
   /** Where the payer sends the amount and the commission, worked out when the order is made. */
   instructions: PaymentInstructions;
   status: OrderStatus;
@@ -28,7 +43,7 @@ export interface Order {
   createdAt: Date;
 }
 
-export type OrderChanges = Partial<Pick<Order, 'status' | 'utr' | 'commissionPaid'>>;
+export type OrderChanges = Partial<Pick<Order, 'status' | 'utr' | 'commissionPaid' | 'commissionUtr' | 'bankRequest'>>;
 
 export function newOrderId(): string {
   return `ord_${randomUUID()}`;
@@ -53,13 +68,33 @@ export class MemoryStore {
     return this.#users.get(id);
   }
 
+  updateUser(id: string, changes: Pick<User, 'bankLink'>): User {
+    const user = this.#users.get(id);
+    if (!user) throw new Error(`No user ${id}`);
+    const updated = { ...user, ...changes };
+    this.#users.set(id, updated);
+    return updated;
+  }
+
+  findUserByLinkId(linkId: string): User | undefined {
+    return [...this.#users.values()].find((user) => user.bankLink?.linkId === linkId);
+  }
+
   getUserByMobile(mobile: string): User | undefined {
     const id = this.#userIdsByMobile.get(mobile);
     return id ? this.#users.get(id) : undefined;
   }
 
-  createOrder(fields: Omit<Order, 'commissionPaid' | 'status' | 'utr' | 'createdAt'>): Order {
-    const order: Order = { ...fields, commissionPaid: false, status: 'awaiting_transfer', utr: null, createdAt: new Date() };
+  createOrder(fields: Omit<Order, 'commissionPaid' | 'commissionUtr' | 'bankRequest' | 'status' | 'utr' | 'createdAt'>): Order {
+    const order: Order = {
+      ...fields,
+      commissionPaid: false,
+      commissionUtr: null,
+      bankRequest: null,
+      status: 'awaiting_transfer',
+      utr: null,
+      createdAt: new Date(),
+    };
     this.#orders.set(order.id, order);
     return order;
   }
@@ -83,6 +118,10 @@ export class MemoryStore {
       .filter((order) => order.payerId === userId || order.payeeId === userId)
       .reverse()
       .slice(0, limit);
+  }
+
+  findOrderByBankRequest(requestId: string): Order | undefined {
+    return [...this.#orders.values()].find((order) => order.bankRequest?.requestId === requestId);
   }
 
   findOrderByReference(reference: string): Order | undefined {

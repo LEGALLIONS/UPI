@@ -1,49 +1,21 @@
 import assert from 'node:assert/strict';
-import type { AddressInfo } from 'node:net';
 import { after, before, describe, it } from 'node:test';
-import type { MeView, OrderView, PayeeView, PlanView, SessionResponse, UpiPaymentRequest } from '../server/api-types.ts';
-import { createApiServer, createSandboxDeps } from '../server/app.ts';
+import type { MeView, OrderView, PayeeView, PlanView } from '../server/api-types.ts';
+import { createSandboxDeps } from '../server/app.ts';
 import { CRORE, LAKH, rupees } from '../src/index.ts';
+import { startApi } from './helpers.ts';
 
 describe('ePay API (sandbox)', () => {
   const deps = createSandboxDeps();
-  const server = createApiServer(deps);
-  let base = '';
+  let api: Awaited<ReturnType<typeof startApi>>;
+  const call: typeof api.call = (...args) => api.call(...args);
+  const signIn = (mobile: string) => api.signIn(mobile);
+  const verify = (token: string, holderName: string) => api.verify(token, holderName);
 
   before(async () => {
-    await new Promise<void>((resolve) => server.listen(0, resolve));
-    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+    api = await startApi(deps);
   });
-  after(() => server.close());
-
-  async function call<T = unknown>(method: string, path: string, options: { body?: unknown; token?: string; headers?: Record<string, string> } = {}) {
-    const response = await fetch(base + path, {
-      method,
-      headers: {
-        ...(options.body !== undefined && { 'Content-Type': 'application/json' }),
-        ...(options.token && { Authorization: `Bearer ${options.token}` }),
-        ...options.headers,
-      },
-      body: options.body === undefined ? undefined : typeof options.body === 'string' ? options.body : JSON.stringify(options.body),
-    });
-    return { status: response.status, body: (await response.json()) as T };
-  }
-
-  async function signIn(mobile: string): Promise<string> {
-    const otp = await call<{ devCode: string }>('POST', '/auth/otp', { body: { mobile } });
-    assert.equal(otp.status, 200);
-    const session = await call<SessionResponse>('POST', '/auth/session', { body: { mobile, code: otp.body.devCode } });
-    assert.equal(session.status, 200);
-    return session.body.token;
-  }
-
-  async function verify(token: string, holderName: string): Promise<MeView> {
-    const request = await call<UpiPaymentRequest>('POST', '/me/verification', { token });
-    assert.match(request.body.upiIntent, /^upi:\/\/pay\?/);
-    const me = await call<MeView>('POST', '/sandbox/penny-drop', { token, body: { requestId: request.body.requestId, holderName } });
-    assert.equal(me.status, 200);
-    return me.body;
-  }
+  after(() => api.close());
 
   const pay = (token: string, amount: number) => call<OrderView>('POST', '/payments', { token, body: { payeeId: payee.id, amount } });
   const step = (token: string, id: string, action: string, body?: unknown) =>

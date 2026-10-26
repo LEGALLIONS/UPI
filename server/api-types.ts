@@ -43,6 +43,13 @@ export interface MeView {
   account: MaskedBankAccount | null;
   /** The UPI ID others can pay this account on, if the bank reported one. */
   upiId: string | null;
+  /** "HDFC Bank", from the IFSC; null before verification or for a bank ePay doesn't know. */
+  bankName: string | null;
+  /**
+   * One-approval payments through the bank's API: unsupported (no agreement with
+   * this bank yet), not_linked, pending (waiting for approval in the bank), linked, declined.
+   */
+  oneApproval: 'unsupported' | 'not_linked' | 'pending' | 'linked' | 'declined';
 }
 
 /** Shown to a payer before they pay, so they can check they have the right person. */
@@ -95,6 +102,10 @@ export interface OrderView {
   commissionPaid: boolean | null;
   /** Payer only: where to send the amount and the commission. */
   instructions: PaymentInstructions | null;
+  /** Payer only: whatever is still to send can go to their bank for one approval now. */
+  oneApproval: boolean;
+  /** Payer only: the latest request to their bank, if any. */
+  bankRequest: { status: 'pending' | 'done' | 'failed'; parts: ('payment' | 'commission')[]; failedParts: ('payment' | 'commission')[] } | null;
   /** Short code in the UPI note or transfer remarks, for matching the transfers to this payment. */
   reference: string;
   /** The bank's reference for the transfer, as the payer gave it. */
@@ -110,6 +121,11 @@ export interface SandboxPennyDropRequest {
   requestId: string;
   /** The name the pretend bank reports for the account. */
   holderName?: string;
+}
+
+export interface SandboxBankRequest {
+  /** commission_fails: the amount goes through but the commission doesn't. */
+  outcome?: 'approve' | 'decline' | 'commission_fails';
 }
 
 export interface SandboxCommissionRequest {

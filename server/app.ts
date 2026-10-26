@@ -1,16 +1,20 @@
 import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { findReference, paymentInstructions, referenceFor } from '../src/checkout.ts';
+import { bankName } from '../src/banks.ts';
+import { findReference, paymentInstructions, referenceFor, splitLegs } from '../src/checkout.ts';
 import { DEFAULT_FEE_POLICY, feeFor, feePercent, type FeePolicy } from '../src/fees.ts';
 import { formatInr } from '../src/money.ts';
 import { AccountVerification, maskAccount, type VerifiedAccountStore } from '../src/onboarding.ts';
 import { InMemoryAccountStore, SandboxPartner } from '../src/providers/sandbox.ts';
 import type {
+  BankEvent,
   CommissionAccount,
+  ConnectedBanking,
   CreditEvent,
   CreditNotifications,
   Payee,
   ReversePennyDropProvider,
+  SplitLeg,
   VerifiedBankAccount,
 } from '../src/providers/types.ts';
 import { planCollection } from '../src/router.ts';
@@ -24,6 +28,8 @@ export interface ApiDeps {
   commissionAccount: CommissionAccount;
   /** ePay's bank reporting money arriving in that account. */
   credits: CreditNotifications;
+  /** Payers' banks, for sending both parts with one approval. */
+  banking: ConnectedBanking;
   accounts: VerifiedAccountStore;
   store: MemoryStore;
   otp: OtpService;
@@ -41,17 +47,21 @@ export const SANDBOX_COMMISSION_ACCOUNT: CommissionAccount = {
   upiId: 'epay@sandbox',
 };
 
-export function createSandboxDeps(options: { webhookSecret?: string; commissionAccount?: CommissionAccount } = {}) {
+export function createSandboxDeps(
+  options: { webhookSecret?: string; commissionAccount?: CommissionAccount; connectedBanks?: string[] } = {},
+) {
   const partner = new SandboxPartner({
     webhookSecret: options.webhookSecret ?? randomBytes(32).toString('hex'),
     merchantVpa: 'epayverify@sandbox',
     merchantName: 'ePay',
+    connectedBanks: options.connectedBanks,
   });
   const otpSender = new SandboxOtpSender();
   return {
     pennyDrop: partner,
     commissionAccount: options.commissionAccount ?? SANDBOX_COMMISSION_ACCOUNT,
     credits: partner,
+    banking: partner,
     accounts: new InMemoryAccountStore(),
     store: new MemoryStore(),
     otp: new OtpService(otpSender),
@@ -120,7 +130,22 @@ export function createApiServer(deps: ApiDeps): Server {
 
   async function meView(user: User): Promise<MeView> {
     const account = await accounts.getAccount(user.id);
-    return { id: user.id, mobile: user.mobile, account: account ? maskAccount(account) : null, upiId: account?.vpa ?? null };
+    return {
+      id: user.id,
+      mobile: user.mobile,
+      account: account ? maskAccount(account) : null,
+      upiId: account?.vpa ?? null,
+      bankName: account ? bankName(account.ifsc) : null,
+      oneApproval: !account || !deps.banking.supports(account.ifsc) ? 'unsupported' : (user.bankLink?.status ?? 'not_linked'),
+    };
+  }
+
+  /** What's still to send. The amount only before it was ever sent: resending it could pay twice. */
+  function unsentParts(order: Order): SplitLeg['part'][] {
+    return [
+      ...(order.status === 'awaiting_transfer' ? (['payment'] as const) : []),
+      ...(order.commissionPaid ? [] : (['commission'] as const)),
+    ];
   }
 
   function payeeView(id: string, account: VerifiedBankAccount): PayeeView {
@@ -132,6 +157,8 @@ export function createApiServer(deps: ApiDeps): Server {
     const [payerAccount, payeeAccount] = await Promise.all([accounts.getAccount(order.payerId), accounts.getAccount(order.payeeId)]);
     if (!payerAccount || !payeeAccount) throw new Error(`A party to ${order.id} has no verified account`);
     const role = viewerId === order.payerId ? 'payer' : 'payee';
+    const payerLinked = store.getUser(order.payerId)?.bankLink?.status === 'linked';
+    const { bankRequest } = order;
     return {
       id: order.id,
       role,
@@ -142,6 +169,11 @@ export function createApiServer(deps: ApiDeps): Server {
       status: order.status,
       commissionPaid: role === 'payer' ? order.commissionPaid : null,
       instructions: role === 'payer' ? order.instructions : null,
+      oneApproval: role === 'payer' && payerLinked && bankRequest?.status !== 'pending' && unsentParts(order).length > 0,
+      bankRequest:
+        role === 'payer' && bankRequest
+          ? { status: bankRequest.status, parts: bankRequest.parts, failedParts: bankRequest.failedParts }
+          : null,
       reference: order.instructions.reference,
       utr: order.utr,
       createdAt: order.createdAt.toISOString(),
@@ -193,9 +225,46 @@ export function createApiServer(deps: ApiDeps): Server {
       console.warn(`Unmatched credit ${credit.utr}: ${formatInr(credit.amount)}, remarks "${credit.remarks}"`);
       return 'unmatched';
     }
+    // The payer's bank may already have reported this same transfer.
+    if (order.commissionUtr === credit.utr) return 'duplicate';
     if (order.commissionPaid) console.warn(`Commission for ${order.id} paid again (${credit.utr}): refund it`);
-    else store.updateOrder(order.id, { commissionPaid: true });
+    else store.updateOrder(order.id, { commissionPaid: true, commissionUtr: credit.utr });
     return 'matched';
+  }
+
+  /** The payer's bank reporting a link approved or declined, or how each part of a payment went. */
+  async function handleBankWebhook(rawBody: string, signature: string): Promise<void> {
+    let event: BankEvent;
+    try {
+      event = await deps.banking.parseBankWebhook(rawBody, signature);
+    } catch (error) {
+      throw new HttpError(400, (error as Error).message);
+    }
+    if (event.kind === 'link') {
+      const user = store.findUserByLinkId(event.linkId);
+      if (user?.bankLink) {
+        store.updateUser(user.id, { bankLink: { ...user.bankLink, status: event.status === 'approved' ? 'linked' : 'declined' } });
+      }
+      return;
+    }
+    const order = store.findOrderByBankRequest(event.requestId);
+    // Unknown, or a repeat of a result already applied.
+    if (!order?.bankRequest || order.bankRequest.status !== 'pending') return;
+    const changes: OrderChanges = {};
+    const failedParts: SplitLeg['part'][] = [];
+    for (const leg of event.legs) {
+      if (leg.status === 'failed' || !leg.utr) {
+        failedParts.push(leg.part);
+      } else if (leg.part === 'payment') {
+        Object.assign(changes, { status: 'sent', utr: leg.utr });
+      } else {
+        Object.assign(changes, { commissionPaid: true, commissionUtr: leg.utr });
+      }
+    }
+    store.updateOrder(order.id, {
+      ...changes,
+      bankRequest: { ...order.bankRequest, status: failedParts.length ? 'failed' : 'done', failedParts },
+    });
   }
 
   const routes: Route[] = [
@@ -238,6 +307,22 @@ export function createApiServer(deps: ApiDeps): Server {
 
     [
       'POST',
+      /^\/me\/bank-link$/,
+      async (ctx) => {
+        const user = await signedInUser(ctx);
+        const account = await accounts.getAccount(user.id);
+        if (!account) throw new HttpError(403, 'Verify your bank account first');
+        if (!deps.banking.supports(account.ifsc)) {
+          throw new HttpError(400, `ePay can't connect to ${bankName(account.ifsc) ?? 'your bank'} yet. Send the two transfers yourself.`);
+        }
+        if (user.bankLink?.status === 'linked' || user.bankLink?.status === 'pending') return json(await meView(user));
+        const { linkId } = await deps.banking.startLink({ customerId: user.id, account });
+        return json(await meView(store.updateUser(user.id, { bankLink: { linkId, status: 'pending' } })));
+      },
+    ],
+
+    [
+      'POST',
       /^\/webhooks\/penny-drop$/,
       async (ctx) => {
         try {
@@ -253,6 +338,15 @@ export function createApiServer(deps: ApiDeps): Server {
       'POST',
       /^\/webhooks\/commission$/,
       async (ctx) => json({ received: true, result: await handleCreditWebhook(ctx.body, signatureOf(ctx)) }),
+    ],
+
+    [
+      'POST',
+      /^\/webhooks\/bank$/,
+      async (ctx) => {
+        await handleBankWebhook(ctx.body, signatureOf(ctx));
+        return json({ received: true });
+      },
     ],
 
     [
@@ -335,7 +429,27 @@ export function createApiServer(deps: ApiDeps): Server {
       async (ctx) => {
         const utr = field(parseJson(ctx.body), 'utr').replace(/\s/g, '').toUpperCase();
         if (!UTR.test(utr)) throw new HttpError(400, 'Enter the reference exactly as your bank shows it: 12 to 22 letters and numbers');
-        return transition(ctx, 'payer', ['awaiting_transfer', 'not_received'], () => ({ status: 'sent', utr }));
+        return transition(ctx, 'payer', ['awaiting_transfer', 'not_received'], (order) => {
+          if (order.bankRequest?.status === 'pending') throw new HttpError(409, 'Your bank is still working on this payment');
+          return { status: 'sent', utr };
+        });
+      },
+    ],
+
+    [
+      'POST',
+      /^\/payments\/([^/]+)\/bank-pay$/,
+      async (ctx) => {
+        const { user, order } = await partyOrder(ctx);
+        if (order.payerId !== user.id) throw new HttpError(403, 'Only the payer can do that');
+        const linkId = user.bankLink?.status === 'linked' ? user.bankLink.linkId : undefined;
+        if (!linkId) throw new HttpError(409, 'Link your bank account first');
+        if (order.bankRequest?.status === 'pending') throw new HttpError(409, 'Your bank is still working on this payment');
+        const parts = unsentParts(order);
+        if (parts.length === 0) throw new HttpError(409, 'Nothing is left to send');
+        const { requestId } = await deps.banking.requestSplitPayment({ linkId, legs: splitLegs(order.instructions, parts) });
+        const updated = store.updateOrder(order.id, { bankRequest: { requestId, parts, status: 'pending', failedParts: [] } });
+        return json(await orderView(updated, user.id));
       },
     ],
 
@@ -386,6 +500,35 @@ export function createApiServer(deps: ApiDeps): Server {
             remarks: typeof remarks === 'string' ? remarks : order.instructions.reference,
           });
           await handleCreditWebhook(webhook.rawBody, webhook.signature);
+          return json(await orderView(store.getOrder(order.id)!, user.id));
+        },
+      ],
+      [
+        'POST',
+        /^\/sandbox\/bank-link$/,
+        async (ctx) => {
+          const user = await signedInUser(ctx);
+          if (user.bankLink?.status !== 'pending') throw new HttpError(409, 'No bank link is waiting for approval');
+          const status = parseJson(ctx.body).outcome === 'decline' ? 'declined' : 'approved';
+          const webhook = sandbox.partner.simulateBankWebhook({ kind: 'link', linkId: user.bankLink.linkId, status });
+          await handleBankWebhook(webhook.rawBody, webhook.signature);
+          return json(await meView(store.getUser(user.id)!));
+        },
+      ],
+      [
+        'POST',
+        /^\/sandbox\/payments\/([^/]+)\/bank$/,
+        async (ctx) => {
+          const { user, order } = await partyOrder(ctx);
+          if (order.payerId !== user.id) throw new HttpError(403, 'Only the payer can do that');
+          if (order.bankRequest?.status !== 'pending') throw new HttpError(409, 'No bank request is waiting for approval');
+          const outcome = parseJson(ctx.body).outcome;
+          const legs = order.bankRequest.parts.map((part) => {
+            const failed = outcome === 'decline' || (outcome === 'commission_fails' && part === 'commission');
+            return { part, status: failed ? ('failed' as const) : ('success' as const), utr: failed ? null : String(randomInt(1e11, 1e12)) };
+          });
+          const webhook = sandbox.partner.simulateBankWebhook({ kind: 'split', requestId: order.bankRequest.requestId, legs });
+          await handleBankWebhook(webhook.rawBody, webhook.signature);
           return json(await orderView(store.getOrder(order.id)!, user.id));
         },
       ],
