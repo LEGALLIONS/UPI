@@ -3,8 +3,8 @@ import type { VerifiedAccountStore } from '../onboarding.ts';
 import { rupees } from '../money.ts';
 import { buildUpiIntent } from '../upi-intent.ts';
 import type {
-  PaymentEvent,
-  PaymentGateway,
+  CreditEvent,
+  CreditNotifications,
   PayoutProvider,
   PennyDropResult,
   ReversePennyDropProvider,
@@ -23,7 +23,7 @@ export interface SandboxOptions {
   merchantName?: string;
 }
 
-export class SandboxPartner implements ReversePennyDropProvider, PaymentGateway, PayoutProvider {
+export class SandboxPartner implements ReversePennyDropProvider, CreditNotifications, PayoutProvider {
   #webhookSecret: string;
   #merchantVpa: string;
   #merchantName: string;
@@ -54,18 +54,14 @@ export class SandboxPartner implements ReversePennyDropProvider, PaymentGateway,
     return this.#signed(result);
   }
 
-  async createUpiOrder(input: Parameters<PaymentGateway['createUpiOrder']>[0]): Promise<UpiPaymentRequest> {
-    return this.#upiRequest('fee', input.amount, `ePay fee ${input.orderId}`);
-  }
-
-  async parsePaymentWebhook(rawBody: string, signature: string): Promise<PaymentEvent> {
+  async parseCreditWebhook(rawBody: string, signature: string): Promise<CreditEvent> {
     const body = this.#verify(rawBody, signature);
-    if (!isPaymentEvent(body)) throw new Error('Webhook body is not a payment event');
+    if (!isCreditEvent(body)) throw new Error('Webhook body is not a credit');
     return body;
   }
 
-  /** What the partner would POST to your webhook when a UPI payment to you finishes. */
-  simulatePaymentWebhook(event: PaymentEvent) {
+  /** What ePay's bank would POST to your webhook when money arrives in ePay's account. */
+  simulateCreditWebhook(event: CreditEvent) {
     return this.#signed(event);
   }
 
@@ -124,10 +120,10 @@ function isPennyDropResult(value: unknown): value is PennyDropResult {
   );
 }
 
-function isPaymentEvent(value: unknown): value is PaymentEvent {
+function isCreditEvent(value: unknown): value is CreditEvent {
   if (typeof value !== 'object' || value === null) return false;
   const body = value as Record<string, unknown>;
-  return typeof body.requestId === 'string' && (body.status === 'success' || body.status === 'failed');
+  return Number.isSafeInteger(body.amount) && typeof body.utr === 'string' && typeof body.remarks === 'string';
 }
 
 export class InMemoryAccountStore implements VerifiedAccountStore {

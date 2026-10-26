@@ -49,6 +49,11 @@ describe('ePay API (sandbox)', () => {
   const step = (token: string, id: string, action: string, body?: unknown) =>
     call<OrderView>('POST', `/payments/${id}/${action}`, { token, body: body ?? {} });
   const view = (token: string, id: string) => call<OrderView>('GET', `/payments/${id}`, { token });
+  const payCommission = (token: string, id: string) => call<OrderView>('POST', `/sandbox/payments/${id}/commission`, { token, body: {} });
+  const credit = (amount: number, utr: string, remarks: string) => {
+    const signed = deps.sandbox.partner.simulateCreditWebhook({ amount, utr, remarks });
+    return call<{ result: string }>('POST', '/webhooks/commission', { body: signed.rawBody, headers: { 'X-Signature': signed.signature } });
+  };
 
   let payer = '';
   let supplier = '';
@@ -82,44 +87,58 @@ describe('ePay API (sandbox)', () => {
     assert.equal((await call('GET', '/payees/9000000002')).status, 401);
   });
 
-  it('plans a ₹3 lakh payment: bank transfer only, and a 0.2% fee', async () => {
+  it('plans a ₹3 lakh payment: bank transfer only, plus a 0.2% commission', async () => {
     const plan = await call<PlanView>('POST', '/payments/plan', { token: payer, body: { payeeId: payee.id, amount: 3 * LAKH } });
     assert.deepEqual(plan.body.options.map((option) => option.method), ['bank_transfer']);
     assert.equal(plan.body.fee, rupees(600));
     assert.equal(plan.body.feePercent, '0.2');
   });
 
-  it('takes the fee first, then sends the money straight to the payee, who confirms it', async () => {
+  it('shows the amount and the commission together; the payee confirms; the commission is matched from the bank', async () => {
     const created = await pay(payer, 3 * LAKH);
     assert.equal(created.status, 201);
     const order = created.body;
-    assert.equal(order.status, 'awaiting_fee');
-    assert.match(order.feeRequest?.upiIntent ?? '', /pa=epay%40sandbox.*am=600\.00/);
-    assert.equal(order.instructions, null, 'no payee details until the fee is paid');
-    assert.equal((await step(payer, order.id, 'sent', { utr: '412345678901' })).status, 409);
-
-    const asPayee = await view(supplier, order.id);
-    assert.equal(asPayee.body.role, 'payee');
-    assert.equal(asPayee.body.feeRequest, null);
-    assert.equal(asPayee.body.payer.name, 'ARUN TRADERS');
-    assert.match(asPayee.body.reference, /^EPAY[A-Z0-9]{8}$/);
-
-    const feePaid = await call<OrderView>('POST', `/sandbox/payments/${order.id}/fee`, { token: payer, body: {} });
-    assert.equal(feePaid.body.status, 'awaiting_transfer');
-    assert.equal(feePaid.body.instructions?.upiIntent, null, '₹3 lakh is over the UPI limit');
-    assert.deepEqual(feePaid.body.instructions?.bankTransfer, {
+    assert.equal(order.status, 'awaiting_transfer');
+    assert.equal(order.commissionPaid, false);
+    const { instructions } = order;
+    assert.ok(instructions);
+    assert.equal(instructions.payment.upiIntent, null, '₹3 lakh is over the UPI limit');
+    assert.deepEqual(instructions.payment.bankTransfer, {
       accountNumber: '50109000000002',
       ifsc: 'HDFC0001234',
       beneficiaryName: 'MEENA STEELS',
       rails: ['imps', 'rtgs', 'neft'],
     });
-    assert.equal((await view(supplier, order.id)).body.instructions, null);
+    assert.equal(instructions.commission.amount, rupees(600));
+    assert.equal(
+      instructions.commission.upiIntent,
+      `upi://pay?pa=epay%40sandbox&pn=EPAY%20TECHNOLOGIES&am=600.00&cu=INR&tr=${order.reference}&tn=${order.reference}`,
+    );
+    assert.deepEqual(instructions.commission.bankTransfer, {
+      accountNumber: '777705550001',
+      ifsc: 'SBXN0000001',
+      beneficiaryName: 'EPAY TECHNOLOGIES',
+      rails: ['imps', 'neft'],
+    });
+
+    const asPayee = await view(supplier, order.id);
+    assert.equal(asPayee.body.role, 'payee');
+    assert.equal(asPayee.body.instructions, null);
+    assert.equal(asPayee.body.commissionPaid, null);
+    assert.equal(asPayee.body.reference, order.reference);
+    assert.equal(asPayee.body.payer.name, 'ARUN TRADERS');
 
     assert.equal((await step(supplier, order.id, 'sent', { utr: '412345678901' })).status, 403);
     assert.equal((await step(payer, order.id, 'sent', { utr: 'not a ref' })).status, 400);
     const sent = await step(payer, order.id, 'sent', { utr: ' 4123 4567 8901 ' });
     assert.equal(sent.body.status, 'sent');
     assert.equal(sent.body.utr, '412345678901');
+
+    const blocked = await call<{ error: string }>('POST', '/payments', { token: payer, body: { payeeId: payee.id, amount: LAKH } });
+    assert.equal(blocked.status, 409);
+    assert.match(blocked.body.error, new RegExp(order.reference));
+
+    assert.equal((await payCommission(payer, order.id)).body.commissionPaid, true);
 
     assert.equal((await step(payer, order.id, 'received')).status, 403);
     assert.equal((await step(supplier, order.id, 'not-received')).body.status, 'not_received');
@@ -130,44 +149,42 @@ describe('ePay API (sandbox)', () => {
     assert.equal((await step(supplier, order.id, 'received')).status, 409);
   });
 
-  it("sends UPI straight to the payee's own UPI ID when it fits", async () => {
+  it("sends UPI straight to the payee's own UPI ID when it fits; the commission can come first", async () => {
     const order = (await pay(payer, rupees(50_000))).body;
-    const paid = await call<OrderView>('POST', `/sandbox/payments/${order.id}/fee`, { token: payer, body: {} });
-    const upi = paid.body.instructions?.upiIntent ?? '';
+    const upi = order.instructions?.payment.upiIntent ?? '';
     assert.match(upi, /^upi:\/\/pay\?pa=9000000002%40sandbox&pn=MEENA%20STEELS&am=50000\.00&cu=INR&tn=EPAY/);
     assert.doesNotMatch(upi, /tr=/);
+    const paid = await payCommission(payer, order.id);
+    assert.equal(paid.body.commissionPaid, true);
+    assert.equal(paid.body.status, 'awaiting_transfer');
   });
 
-  it('lets the payer retry a failed fee, and still counts a late payment of the first one', async () => {
+  it('matches credits to ePay by the reference in the remarks, once, and only for the full commission', async () => {
     const order = (await pay(payer, LAKH)).body;
-    const firstRequest = order.feeRequest!.requestId;
-    const failed = await call<OrderView>('POST', `/sandbox/payments/${order.id}/fee`, { token: payer, body: { status: 'failed' } });
-    assert.equal(failed.body.status, 'awaiting_fee');
-    assert.equal(failed.body.feeFailed, true);
+    const [prefix, code] = [order.reference.slice(0, 4), order.reference.slice(4)];
+    assert.equal((await credit(rupees(200), 'UTR000000001', 'no reference here')).body.result, 'unmatched');
+    assert.equal((await credit(rupees(199), 'UTR000000002', order.reference)).body.result, 'unmatched');
+    assert.equal((await view(payer, order.id)).body.commissionPaid, false);
 
-    const retried = await step(payer, order.id, 'fee');
-    assert.notEqual(retried.body.feeRequest?.requestId, firstRequest);
-    assert.equal(retried.body.feeFailed, false);
-
-    const late = deps.sandbox.partner.simulatePaymentWebhook({ requestId: firstRequest, status: 'success' });
-    const hook = await call<{ matched: boolean }>('POST', '/webhooks/payments', { body: late.rawBody, headers: { 'X-Signature': late.signature } });
-    assert.equal(hook.body.matched, true);
-    assert.equal((await view(payer, order.id)).body.status, 'awaiting_transfer');
+    const messy = `Commission ${prefix.toLowerCase()} ${code.slice(0, 4)} ${code.slice(4)}`;
+    assert.equal((await credit(rupees(200), 'UTR000000003', messy)).body.result, 'matched');
+    assert.equal((await credit(rupees(200), 'UTR000000003', messy)).body.result, 'duplicate');
+    assert.equal((await view(payer, order.id)).body.commissionPaid, true);
   });
 
-  it('rejects webhooks with a bad signature', async () => {
-    const signed = deps.sandbox.partner.simulatePaymentWebhook({ requestId: 'fee_1', status: 'success' });
-    const response = await call('POST', '/webhooks/payments', {
-      body: signed.rawBody.replace('success', 'failed'),
+  it('rejects credit notices with a bad signature', async () => {
+    const signed = deps.sandbox.partner.simulateCreditWebhook({ amount: rupees(600), utr: 'UTR1', remarks: 'EPAY00000000' });
+    const response = await call('POST', '/webhooks/commission', {
+      body: signed.rawBody.replace('600', '6000'),
       headers: { 'X-Signature': signed.signature },
     });
     assert.equal(response.status, 400);
   });
 
-  it('refuses amounts whose fee would be over the UPI limit', async () => {
-    const response = await call<{ error: string }>('POST', '/payments/plan', { token: payer, body: { payeeId: payee.id, amount: 6 * CRORE } });
-    assert.equal(response.status, 400);
-    assert.match(response.body.error, /UPI limit/);
+  it('takes the commission on very large amounts by bank transfer', async () => {
+    const plan = await call<PlanView>('POST', '/payments/plan', { token: payer, body: { payeeId: payee.id, amount: 6 * CRORE } });
+    assert.equal(plan.status, 200);
+    assert.equal(plan.body.fee, rupees(1_20_000));
   });
 
   it('needs a verified account to pay', async () => {
@@ -178,9 +195,8 @@ describe('ePay API (sandbox)', () => {
 
   it('lists payments sent and received, newest first, to the two parties only', async () => {
     const sent = await call<OrderView[]>('GET', '/payments', { token: payer });
-    assert.equal(sent.body.length, 3);
-    assert.deepEqual(sent.body.map((order) => order.role), ['payer', 'payer', 'payer']);
     assert.deepEqual(sent.body.map((order) => order.amount), [LAKH, rupees(50_000), 3 * LAKH]);
+    assert.deepEqual(sent.body.map((order) => order.role), ['payer', 'payer', 'payer']);
     const received = await call<OrderView[]>('GET', '/payments', { token: supplier });
     assert.deepEqual(received.body.map((order) => order.role), ['payee', 'payee', 'payee']);
     const other = await signIn('9000000004');

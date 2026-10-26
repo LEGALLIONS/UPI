@@ -1,9 +1,9 @@
 import { assertValidAmount, rupees, type Paise } from './money.ts';
 
 /**
- * ePay's commission. The payer pays it as a small, separate UPI payment into
- * ePay's own account before sending the main amount, so the main amount can
- * go straight to the payee without passing through ePay.
+ * ePay's commission, on top of the amount. The payer sends it at the same time
+ * as the payment, as a separate transfer into ePay's own account, so the
+ * amount itself goes straight to the payee without passing through ePay.
  */
 export interface FeePolicy {
   /** In basis points: 20 = 0.2%. */

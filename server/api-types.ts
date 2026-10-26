@@ -59,7 +59,7 @@ export interface PlanRequest {
   amount: Paise;
 }
 
-/** The ways to send the amount, plus ePay's fee, which the payer pays separately. */
+/** The ways to send the amount, plus ePay's commission, which the payer sends at the same time to ePay's account. */
 export interface PlanView extends CollectionPlan {
   fee: Paise;
   /** "0.2" */
@@ -69,13 +69,13 @@ export interface PlanView extends CollectionPlan {
 export type PaymentRequest = PlanRequest;
 
 /**
- * awaiting_fee: the payer pays ePay's fee by UPI; the partner confirms it by webhook.
+ * The payment itself; the commission is tracked separately in commissionPaid.
  * awaiting_transfer: the payer sends the amount straight to the payee's bank.
  * sent: the payer has given the bank reference; the payee checks their account.
  * received: the payee has confirmed. Done.
  * not_received: the payee can't find it; the payer checks and gives the reference again.
  */
-export type OrderStatus = 'awaiting_fee' | 'awaiting_transfer' | 'sent' | 'received' | 'not_received';
+export type OrderStatus = 'awaiting_transfer' | 'sent' | 'received' | 'not_received';
 
 export interface PartyView {
   id: string;
@@ -91,13 +91,11 @@ export interface OrderView {
   amount: Paise;
   fee: Paise;
   status: OrderStatus;
-  /** Payer only, while the fee is unpaid. */
-  feeRequest: UpiPaymentRequest | null;
-  /** The last fee payment failed; the payer can ask for a new one. */
-  feeFailed: boolean;
-  /** Payer only, once the fee is paid: where to send the money. */
+  /** Whether ePay's bank has reported the commission arriving. null for the payee, who doesn't pay it. */
+  commissionPaid: boolean | null;
+  /** Payer only: where to send the amount and the commission. */
   instructions: PaymentInstructions | null;
-  /** Short code the payer puts in the transfer's remarks, for the payee to spot in their statement. */
+  /** Short code in the UPI note or transfer remarks, for matching the transfers to this payment. */
   reference: string;
   /** The bank's reference for the transfer, as the payer gave it. */
   utr: string | null;
@@ -114,6 +112,7 @@ export interface SandboxPennyDropRequest {
   holderName?: string;
 }
 
-export interface SandboxFeeRequest {
-  status?: 'success' | 'failed';
+export interface SandboxCommissionRequest {
+  /** The remarks the pretend transfer carries; defaults to the payment's reference. */
+  remarks?: string;
 }

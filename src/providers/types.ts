@@ -1,10 +1,10 @@
 import type { Paise } from '../money.ts';
 import type { TransferRail } from '../router.ts';
 
-// What ePay needs from a licensed partner (payment aggregator or bank). Payments
-// themselves go straight from payer's bank to payee's bank, so a partner is only
-// needed to verify bank accounts and to collect ePay's own fee. Each interface
-// maps to an API that Cashfree, Razorpay, Setu, Decentro and others offer.
+// What ePay needs from partners. Payments go straight from the payer's bank to
+// the payee's, and the commission straight to ePay's own account, so ePay only
+// needs account verification (Cashfree, Setu, Decentro and others offer it) and
+// credit notifications from its own bank (API banking).
 
 /** Account details reported by the bank itself, never typed in by the customer. */
 export interface VerifiedBankAccount {
@@ -49,17 +49,27 @@ export interface ReversePennyDropProvider {
   parsePennyDropWebhook(rawBody: string, signature: string): Promise<PennyDropResult>;
 }
 
-/** A UPI payment into ePay's own account finished. */
-export interface PaymentEvent {
-  requestId: string;
-  status: 'success' | 'failed';
+/** ePay's own bank account, where commissions are paid. It never changes, so payers add it as a beneficiary once. */
+export interface CommissionAccount {
+  accountNumber: string;
+  ifsc: string;
+  name: string;
+  upiId: string;
 }
 
-/** Collects payments into ePay's own account: ePay's fee. Settlement time doesn't matter here. */
-export interface PaymentGateway {
-  createUpiOrder(input: { orderId: string; amount: Paise; payer: Customer }): Promise<UpiPaymentRequest>;
+/** Money arriving in ePay's own account, as its bank reports it. */
+export interface CreditEvent {
+  amount: Paise;
+  /** The bank's reference for the transfer. */
+  utr: string;
+  /** The UPI note or transfer remarks, where the payer puts the payment's reference. */
+  remarks: string;
+}
+
+/** ePay's own bank telling ePay about each credit to its account (API banking). */
+export interface CreditNotifications {
   /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
-  parsePaymentWebhook(rawBody: string, signature: string): Promise<PaymentEvent>;
+  parseCreditWebhook(rawBody: string, signature: string): Promise<CreditEvent>;
 }
 
 /** Sends money from a business's own current account through its bank's API (connected banking). */

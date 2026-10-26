@@ -45,10 +45,9 @@ for (const [label, payment] of scenarios) {
   for (const option of plan.unavailable) console.log(`     ✗ ${option.method}: ${option.reason}`);
 }
 
-console.log('\n3. The customer pays the ₹600 fee by UPI to ePay; once it is confirmed, they see where to send ₹3 lakh');
-const payer = { id: 'cust_1', name: 'ARUN TRADERS', mobile: '9000000001' };
-const fee = await partner.createUpiOrder({ orderId: 'ord_1', amount: feeFor(3 * LAKH), payer });
-console.log(`   Fee: ${fee.upiIntent}`);
+console.log('\n3. The customer pays ₹3 lakh: the amount to Meena Steels and the ₹600 commission to ePay, at the same time');
+const commissionAccount = { accountNumber: '777705550001', ifsc: 'ICIC0000001', name: 'EPAY TECHNOLOGIES', upiId: 'epay@icici' };
 const payee = { id: supplier.id, name: 'MEENA STEELS', account: (await accounts.getAccount(supplier.id))! };
-console.log('  ', paymentInstructions({ orderId: 'ord_1', payee, plan: planCollection({ amount: 3 * LAKH }) }));
-console.log('   The money goes straight from their bank to Meena Steels by IMPS or RTGS, arriving in seconds.');
+const plan = planCollection({ amount: 3 * LAKH });
+console.dir(paymentInstructions({ orderId: 'ord_1', payee, plan, fee: feeFor(plan.amount), commissionAccount }), { depth: 4 });
+console.log('   Both go straight from their bank: the amount to Meena Steels, the commission to ePay. Nothing waits on a settlement.');

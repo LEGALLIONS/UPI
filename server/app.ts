@@ -1,16 +1,15 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { paymentInstructions } from '../src/checkout.ts';
+import { findReference, paymentInstructions, referenceFor } from '../src/checkout.ts';
 import { DEFAULT_FEE_POLICY, feeFor, feePercent, type FeePolicy } from '../src/fees.ts';
-import { DEFAULT_LIMITS } from '../src/limits.ts';
 import { formatInr } from '../src/money.ts';
 import { AccountVerification, maskAccount, type VerifiedAccountStore } from '../src/onboarding.ts';
 import { InMemoryAccountStore, SandboxPartner } from '../src/providers/sandbox.ts';
 import type {
-  Customer,
+  CommissionAccount,
+  CreditEvent,
+  CreditNotifications,
   Payee,
-  PaymentEvent,
-  PaymentGateway,
   ReversePennyDropProvider,
   VerifiedBankAccount,
 } from '../src/providers/types.ts';
@@ -21,8 +20,10 @@ import { MemoryStore, newOrderId, type Order, type OrderChanges, type User } fro
 
 export interface ApiDeps {
   pennyDrop: ReversePennyDropProvider;
-  /** Collects ePay's fee into ePay's own account. Payments themselves never pass through it. */
-  gateway: PaymentGateway;
+  /** ePay's own account, where payers send the commission alongside each payment. */
+  commissionAccount: CommissionAccount;
+  /** ePay's bank reporting money arriving in that account. */
+  credits: CreditNotifications;
   accounts: VerifiedAccountStore;
   store: MemoryStore;
   otp: OtpService;
@@ -33,16 +34,24 @@ export interface ApiDeps {
   sandbox?: { partner: SandboxPartner; otpSender: SandboxOtpSender };
 }
 
-export function createSandboxDeps(options: { webhookSecret?: string } = {}) {
+export const SANDBOX_COMMISSION_ACCOUNT: CommissionAccount = {
+  accountNumber: '777705550001',
+  ifsc: 'SBXN0000001',
+  name: 'EPAY TECHNOLOGIES',
+  upiId: 'epay@sandbox',
+};
+
+export function createSandboxDeps(options: { webhookSecret?: string; commissionAccount?: CommissionAccount } = {}) {
   const partner = new SandboxPartner({
     webhookSecret: options.webhookSecret ?? randomBytes(32).toString('hex'),
-    merchantVpa: 'epay@sandbox',
+    merchantVpa: 'epayverify@sandbox',
     merchantName: 'ePay',
   });
   const otpSender = new SandboxOtpSender();
   return {
     pennyDrop: partner,
-    gateway: partner,
+    commissionAccount: options.commissionAccount ?? SANDBOX_COMMISSION_ACCOUNT,
+    credits: partner,
     accounts: new InMemoryAccountStore(),
     store: new MemoryStore(),
     otp: new OtpService(otpSender),
@@ -76,7 +85,6 @@ const MAX_BODY_BYTES = 64 * 1024;
 const UTR = /^[A-Z0-9]{12,22}$/;
 
 const STATUS_WORDS: Record<OrderStatus, string> = {
-  awaiting_fee: 'waiting for the ePay fee',
   awaiting_transfer: 'waiting for the money to be sent',
   sent: 'marked as sent',
   received: 'confirmed as received',
@@ -96,11 +104,10 @@ export function createApiServer(deps: ApiDeps): Server {
     return user;
   }
 
-  async function verifiedPayer(ctx: Context): Promise<{ user: User; payer: Customer }> {
+  async function verifiedPayer(ctx: Context): Promise<User> {
     const user = await signedInUser(ctx);
-    const account = await accounts.getAccount(user.id);
-    if (!account) throw new HttpError(403, 'Verify your bank account first');
-    return { user, payer: { id: user.id, name: account.holderName, mobile: user.mobile } };
+    if (!(await accounts.getAccount(user.id))) throw new HttpError(403, 'Verify your bank account first');
+    return user;
   }
 
   async function payeeById(id: string, payerId: string): Promise<{ user: User; payee: Payee }> {
@@ -125,7 +132,6 @@ export function createApiServer(deps: ApiDeps): Server {
     const [payerAccount, payeeAccount] = await Promise.all([accounts.getAccount(order.payerId), accounts.getAccount(order.payeeId)]);
     if (!payerAccount || !payeeAccount) throw new Error(`A party to ${order.id} has no verified account`);
     const role = viewerId === order.payerId ? 'payer' : 'payee';
-    const feePaid = order.status !== 'awaiting_fee';
     return {
       id: order.id,
       role,
@@ -134,9 +140,8 @@ export function createApiServer(deps: ApiDeps): Server {
       amount: order.amount,
       fee: order.fee,
       status: order.status,
-      feeRequest: role === 'payer' && !feePaid ? order.feeRequest : null,
-      feeFailed: order.feeFailed,
-      instructions: role === 'payer' && feePaid ? order.instructions : null,
+      commissionPaid: role === 'payer' ? order.commissionPaid : null,
+      instructions: role === 'payer' ? order.instructions : null,
       reference: order.instructions.reference,
       utr: order.utr,
       createdAt: order.createdAt.toISOString(),
@@ -147,12 +152,7 @@ export function createApiServer(deps: ApiDeps): Server {
     const amount = body.amount;
     if (typeof amount !== 'number') throw new HttpError(400, 'amount must be a number of paise');
     const plan = planCollection({ amount, merchantCategory: payeeUser.merchantCategory, payeeHasUpi: Boolean(payee.account.vpa) });
-    const fee = feeFor(amount, feePolicy);
-    // The fee is paid by UPI to ePay, so it has to fit within one UPI payment.
-    if (fee > DEFAULT_LIMITS.upiDefault.perTxn) {
-      throw new HttpError(400, `ePay's fee on this amount would be over the ${formatInr(DEFAULT_LIMITS.upiDefault.perTxn)} UPI limit`);
-    }
-    return { ...plan, fee, feePercent: feePercent(feePolicy) };
+    return { ...plan, fee: feeFor(amount, feePolicy), feePercent: feePercent(feePolicy) };
   }
 
   /** The order, if the signed-in user paid or is being paid in it. */
@@ -177,22 +177,25 @@ export function createApiServer(deps: ApiDeps): Server {
     return json(await orderView(store.updateOrder(order.id, await changes(order)), user.id));
   }
 
-  async function handlePaymentWebhook(rawBody: string, signature: string): Promise<boolean> {
-    let event: PaymentEvent;
+  /** Matches money arriving in ePay's account to a payment's commission, by the reference in its remarks. */
+  async function handleCreditWebhook(rawBody: string, signature: string): Promise<'matched' | 'unmatched' | 'duplicate'> {
+    let credit: CreditEvent;
     try {
-      event = await deps.gateway.parsePaymentWebhook(rawBody, signature);
+      credit = await deps.credits.parseCreditWebhook(rawBody, signature);
     } catch (error) {
       throw new HttpError(400, (error as Error).message);
     }
-    const order = store.findOrderByFeeRequest(event.requestId);
-    if (!order) return false;
-    if (event.status === 'success') {
-      if (order.status === 'awaiting_fee') store.updateOrder(order.id, { status: 'awaiting_transfer', feeFailed: false });
-      else console.warn(`Fee for ${order.id} paid twice (${event.requestId}): refund one`);
-    } else if (order.status === 'awaiting_fee' && order.feeRequest.requestId === event.requestId) {
-      store.updateOrder(order.id, { feeFailed: true });
+    if (!store.recordCredit(credit.utr)) return 'duplicate';
+    const reference = findReference(credit.remarks);
+    const order = reference ? store.findOrderByReference(reference) : undefined;
+    if (!order || credit.amount < order.fee) {
+      // No reference, or too little: needs a person to match it up or refund it.
+      console.warn(`Unmatched credit ${credit.utr}: ${formatInr(credit.amount)}, remarks "${credit.remarks}"`);
+      return 'unmatched';
     }
-    return true;
+    if (order.commissionPaid) console.warn(`Commission for ${order.id} paid again (${credit.utr}): refund it`);
+    else store.updateOrder(order.id, { commissionPaid: true });
+    return 'matched';
   }
 
   const routes: Route[] = [
@@ -248,8 +251,8 @@ export function createApiServer(deps: ApiDeps): Server {
 
     [
       'POST',
-      /^\/webhooks\/payments$/,
-      async (ctx) => json({ received: true, matched: await handlePaymentWebhook(ctx.body, signatureOf(ctx)) }),
+      /^\/webhooks\/commission$/,
+      async (ctx) => json({ received: true, result: await handleCreditWebhook(ctx.body, signatureOf(ctx)) }),
     ],
 
     [
@@ -271,7 +274,7 @@ export function createApiServer(deps: ApiDeps): Server {
       'POST',
       /^\/payments\/plan$/,
       async (ctx) => {
-        const { user } = await verifiedPayer(ctx);
+        const user = await verifiedPayer(ctx);
         const body = parseJson(ctx.body);
         const { user: payeeUser, payee } = await payeeById(field(body, 'payeeId'), user.id);
         return json(planFor(body, payee, payeeUser));
@@ -282,20 +285,27 @@ export function createApiServer(deps: ApiDeps): Server {
       'POST',
       /^\/payments$/,
       async (ctx) => {
-        const { user, payer } = await verifiedPayer(ctx);
+        const user = await verifiedPayer(ctx);
+        const owed = store.unpaidCommissions(user.id)[0];
+        if (owed) {
+          throw new HttpError(
+            409,
+            `ePay hasn't received the commission for your payment ${owed.instructions.reference} yet. You can start a new payment once it arrives.`,
+          );
+        }
         const body = parseJson(ctx.body);
         const { user: payeeUser, payee } = await payeeById(field(body, 'payeeId'), user.id);
         const plan = planFor(body, payee, payeeUser);
-        const id = newOrderId();
-        const feeRequest = await deps.gateway.createUpiOrder({ orderId: id, amount: plan.fee, payer });
+        let id = newOrderId();
+        // References are short, so make sure this one isn't already taken.
+        while (store.findOrderByReference(referenceFor(id))) id = newOrderId();
         const order = store.createOrder({
           id,
           payerId: user.id,
           payeeId: payee.id,
           amount: plan.amount,
           fee: plan.fee,
-          feeRequest,
-          instructions: paymentInstructions({ orderId: id, payee, plan }),
+          instructions: paymentInstructions({ orderId: id, payee, plan, fee: plan.fee, commissionAccount: deps.commissionAccount }),
         });
         return json(await orderView(order, user.id), 201);
       },
@@ -317,18 +327,6 @@ export function createApiServer(deps: ApiDeps): Server {
         const { user, order } = await partyOrder(ctx);
         return json(await orderView(order, user.id));
       },
-    ],
-
-    [
-      'POST',
-      /^\/payments\/([^/]+)\/fee$/,
-      async (ctx) =>
-        transition(ctx, 'payer', ['awaiting_fee'], async (order) => {
-          const account = (await accounts.getAccount(order.payerId))!;
-          const payer = { id: order.payerId, name: account.holderName, mobile: store.getUser(order.payerId)!.mobile };
-          const feeRequest = await deps.gateway.createUpiOrder({ orderId: order.id, amount: order.fee, payer });
-          return { feeRequest, feeFailed: false };
-        }),
     ],
 
     [
@@ -377,13 +375,17 @@ export function createApiServer(deps: ApiDeps): Server {
       ],
       [
         'POST',
-        /^\/sandbox\/payments\/([^/]+)\/fee$/,
+        /^\/sandbox\/payments\/([^/]+)\/commission$/,
         async (ctx) => {
           const { user, order } = await partyOrder(ctx);
           if (order.payerId !== user.id) throw new HttpError(403, 'Only the payer can do that');
-          const status = parseJson(ctx.body).status === 'failed' ? 'failed' : 'success';
-          const webhook = sandbox.partner.simulatePaymentWebhook({ requestId: order.feeRequest.requestId, status });
-          await handlePaymentWebhook(webhook.rawBody, webhook.signature);
+          const remarks = parseJson(ctx.body).remarks;
+          const webhook = sandbox.partner.simulateCreditWebhook({
+            amount: order.fee,
+            utr: String(randomInt(1e11, 1e12)),
+            remarks: typeof remarks === 'string' ? remarks : order.instructions.reference,
+          });
+          await handleCreditWebhook(webhook.rawBody, webhook.signature);
           return json(await orderView(store.getOrder(order.id)!, user.id));
         },
       ],
