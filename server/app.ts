@@ -30,7 +30,7 @@ export interface ApiDeps {
   otp: OtpService;
   sessions: Sessions;
   payeeLookups: RateLimiter;
-  /** Deep links the bank may send payers back to, e.g. "ipay://". Anything else is refused. */
+  /** Deep links the bank may send payers back to, e.g. "epay://". Anything else is refused. */
   returnUrlPrefixes: string[];
   /** Present only in sandbox mode: enables the /sandbox routes that simulate each step. */
   sandbox?: { partner: SandboxPartner; otpSender: SandboxOtpSender };
@@ -39,8 +39,8 @@ export interface ApiDeps {
 export function createSandboxDeps(options: { publicUrl: string; webhookSecret?: string }) {
   const partner = new SandboxPartner({
     webhookSecret: options.webhookSecret ?? randomBytes(32).toString('hex'),
-    merchantVpa: 'ipay@sandbox',
-    merchantName: 'iPay',
+    merchantVpa: 'epay@sandbox',
+    merchantName: 'ePay',
     bankPageUrl: `${options.publicUrl}/sandbox/bank`,
   });
   const otpSender = new SandboxOtpSender();
@@ -55,7 +55,7 @@ export function createSandboxDeps(options: { publicUrl: string; webhookSecret?: 
     sessions: new Sessions(),
     payeeLookups: new RateLimiter(30, 60 * 60 * 1000),
     // exp:// is Expo Go during development.
-    returnUrlPrefixes: ['ipay://', 'exp://', 'exps://'],
+    returnUrlPrefixes: ['epay://', 'exp://', 'exps://'],
     sandbox: { partner, otpSender },
   } satisfies ApiDeps;
 }
@@ -104,7 +104,7 @@ export function createApiServer(deps: ApiDeps): Server {
   async function payeeById(id: string, payerId: string): Promise<{ user: User; payee: Payee }> {
     const user = store.getUser(id);
     const account = user ? await accounts.getAccount(user.id) : undefined;
-    if (!user || !account) throw new HttpError(404, 'No verified iPay user with that ID');
+    if (!user || !account) throw new HttpError(404, 'No verified ePay user with that ID');
     if (user.id === payerId) throw new HttpError(400, "You can't pay yourself");
     return { user, payee: { id: user.id, name: account.holderName, account } };
   }
@@ -230,7 +230,7 @@ export function createApiServer(deps: ApiDeps): Server {
         if (mobile === user.mobile) throw new HttpError(400, "That's your own number");
         const payee = store.getUserByMobile(mobile);
         const account = payee ? await accounts.getAccount(payee.id) : undefined;
-        if (!payee || !account) throw new HttpError(404, 'No verified iPay user has this number');
+        if (!payee || !account) throw new HttpError(404, 'No verified ePay user has this number');
         return json(payeeView(payee.id, account));
       },
     ],

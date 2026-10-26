@@ -1,4 +1,4 @@
-// Starts the iPay API in sandbox mode: npm run server
+// Starts the ePay API in sandbox mode: npm run server
 import { networkInterfaces } from 'node:os';
 import { createApiServer, createSandboxDeps } from './app.ts';
 
@@ -8,7 +8,7 @@ const publicUrl = process.env.PUBLIC_URL ?? `http://${lanAddress() ?? 'localhost
 
 const deps = createSandboxDeps({ publicUrl, webhookSecret: process.env.WEBHOOK_SECRET });
 createApiServer(deps).listen(port, () => {
-  console.log(`iPay API (sandbox, no real money) on ${publicUrl}`);
+  console.log(`ePay API (sandbox, no real money) on ${publicUrl}`);
   console.log(`Run the app with EXPO_PUBLIC_API_URL=${publicUrl} if it can't find this server by itself.`);
 });
 

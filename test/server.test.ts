@@ -5,9 +5,9 @@ import type { MeView, OrderView, PayeeView, SessionResponse, UpiPaymentRequest }
 import { createApiServer, createSandboxDeps } from '../server/app.ts';
 import { LAKH, type CollectionPlan } from '../src/index.ts';
 
-const RETURN_URL = 'ipay://payment-return';
+const RETURN_URL = 'epay://payment-return';
 
-describe('iPay API (sandbox)', () => {
+describe('ePay API (sandbox)', () => {
   const deps = createSandboxDeps({ publicUrl: 'http://localhost' });
   const server = createApiServer(deps);
   let base = '';

@@ -1,4 +1,4 @@
-// The HTTP API between the iPay app and this server. The app imports these types too.
+// The HTTP API between the ePay app and this server. The app imports these types too.
 import type { PaymentInstruction } from '../src/checkout.ts';
 import type { Paise } from '../src/money.ts';
 import type { MaskedBankAccount } from '../src/onboarding.ts';

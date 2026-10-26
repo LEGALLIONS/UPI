@@ -1,50 +1,89 @@
-# UPI for high-value business payments
+# ePay
 
-UPI stops at ₹1 lakh a day for most payments. Businesses often need to move far more. This project keeps the UPI experience where it works, and above the limit sends the payment to net banking, bank transfer or e-NACH, which have no UPI cap.
+A mobile app for paying businesses by mobile number, above the ₹1 lakh UPI limit.
 
-It never asks for net banking passwords, and never needs the customer to type an account number. Account details come from the bank itself, through a ₹1 UPI payment.
+UPI stops at ₹1 lakh a day for most payments, and businesses often need to pay far more. ePay keeps UPI where it fits. Above that, it moves the payment to net banking, bank transfer or e-NACH, which have no UPI cap. The payer always approves on their own bank's page or in their own banking app. ePay never asks for a net banking password, and nobody types an account number.
 
 ## How it works
 
-1. **Sign in** with mobile number and OTP (use your own SMS provider).
-2. **Verify the bank account** with a *reverse penny drop*. The customer pays ₹1 from any UPI app, and the provider reports the account number, IFSC and name it came from, then refunds the ₹1. See `src/onboarding.ts`.
-3. **Plan each payment** by amount. `planCollection` returns the methods that fit, best first, and says why the others don't. See `src/router.ts`.
-4. **Start the chosen payment.** `startPayment` creates a UPI request, a net banking redirect to the customer's bank, a dedicated account number to transfer to, or an e-NACH mandate. See `src/checkout.ts`.
-5. **Pay out** to verified accounts with `planPayout`, which picks IMPS, RTGS or NEFT.
+1. **Sign in** with mobile number and OTP.
+2. **Verify your bank account** by paying ₹1 by UPI. The bank reports the account number, IFSC and name the ₹1 came from (a *reverse penny drop*), and the ₹1 is refunded. Because the name comes from the bank, nobody can pass themselves off as another business.
+3. **Find who to pay** by their mobile number. Only verified ePay users show up, with their name as their bank has it.
+4. **Enter the amount.** ePay shows the ways to pay that fit, best first, and says why the others don't:
+   - **UPI** while it's within the limit
+   - **Net banking**: log in on your bank's own page
+   - **Bank transfer** (IMPS, RTGS or NEFT) to an account number that stays the same for that payee
+   - **e-NACH** for monthly payments: approve once, later debits are automatic
+5. **Done.** The licensed partner settles straight to the payee's verified account, so the money never sits with ePay.
 
-## Limits used
+## What's in the repo
+
+| Folder | What it is |
+|---|---|
+| `app/` | The ePay mobile app (React Native with Expo, Android and iOS) |
+| `server/` | The API the app talks to. It holds the partner API keys, which must never be in the app |
+| `src/` | Payment logic: limits, choosing a payment method, account verification, partner interfaces |
+| `test/` | Tests for the server and payment logic |
+
+## Try it on your phone
+
+Both run in **sandbox mode**: no real money moves, and each step that would involve a bank has a "Simulate" button or a test bank page.
+
+You need Node 22.18 or later, and the free **Expo Go** app on your phone (Play Store or App Store). Your phone and computer must be on the same Wi-Fi.
+
+```sh
+# 1. Start the server
+npm install
+npm run server
+
+# 2. In another terminal, start the app
+cd app
+npm install
+npx expo start
+```
+
+Scan the QR code with your phone's camera (iPhone) or with Expo Go (Android). The app finds the server on your computer by itself. If it can't, start it with `EXPO_PUBLIC_API_URL=http://<your computer's IP>:3000 npx expo start`.
+
+In the sandbox, the OTP appears on screen instead of by SMS. To pay someone, sign in on a second phone (or with a second number) and verify that account too.
+
+## Payment limits used
 
 | Rail | Limit | Used for |
 |---|---|---|
 | UPI, person to person and ordinary merchants | ₹1L per payment, ₹1L/day | Small payments |
-| UPI, NPCI-verified merchant categories | ₹2L to ₹5L per payment, ₹5L to ₹10L/day (none for business payments) | Higher-value merchant payments |
+| UPI, NPCI-verified merchant categories | ₹2L to ₹5L per payment, ₹5L to ₹10L/day (none for business payments) | Higher-value payments to verified businesses |
 | Net banking via a payment gateway | Set by the payer's bank | One-off payments above UPI |
 | Bank transfer to a virtual account | IMPS up to ₹5L; RTGS from ₹2L, no maximum; NEFT, no maximum | Large one-off payments |
 | e-NACH mandate | Up to ₹1 crore per debit | Recurring payments |
 
-The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers. Load them from config in production, and check the current NPCI circulars before launch. You can pass your own limits to `planCollection` and `planPayout`.
+The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers, so check the current NPCI circulars before launch.
 
-## Running it
-
-Needs Node 22.18 or later. Node runs the TypeScript directly, so there's no build step.
+## Development
 
 ```sh
-npm install
-npm test           # unit tests
-npm run typecheck  # tsc, no output files
-npm run demo       # walk-through against the sandbox
+npm test               # payment logic and server tests
+npm run typecheck
+npm run demo           # the payment logic on its own, in the terminal
+
+cd app
+npm test               # amount parsing and formatting
+npm run typecheck
 ```
+
+`app/AGENTS.md` has Expo's notes for working on the app.
 
 ## What's real and what's a placeholder
 
-- **Real:** the routing rules, the limits, the UPI deep link builder, the verification flow, webhook signature checks, and masking account numbers for display.
-- **Placeholder:** `src/providers/sandbox.ts` stands in for a licensed partner and moves no money. `src/providers/types.ts` lists the APIs to implement. Cashfree, Razorpay, Setu, Decentro and the banks' API banking offer each of them. Write one adapter per partner and swap it in for `SandboxPartner`.
-- **Not included:** a database (implement `VerifiedAccountStore`), HTTP routes, OTP sign-in, and UPI AutoPay.
+- **Real:** the app's screens and flows, choosing a payment method, the limits, sign-in with OTP and sessions, account verification, payee lookup, payment status from signed webhooks, and matching bank transfers by account and exact amount (once per bank reference).
+- **Placeholder:** `src/providers/sandbox.ts` stands in for a licensed partner and moves no money. `src/providers/types.ts` lists the partner APIs to implement. Cashfree, Razorpay, Setu, Decentro and banks' API banking offer them. Write one adapter per partner and use it in place of `SandboxPartner`.
+- **Not included yet:** a database (`server/store.ts` keeps everything in memory, so a restart loses it), SMS sending for OTPs (`OtpSender` in `server/auth.ts`), and push notifications.
 
 ## Before going live
 
-- Work through a licensed payment aggregator or bank. Holding customers' money yourself needs RBI authorisation.
-- Never collect or store net banking credentials. Every method here sends the customer to their own bank to approve.
-- Never split one payment into several UPI payments to get under the limit. Use the other methods instead.
-- Check every partner webhook's signature against the raw request body before acting on it.
-- Store full account numbers encrypted, and show only the masked form (`maskAccount`).
+- **Partner:** work through a licensed payment aggregator or bank, using its split-settlement feature so money goes straight to payees. Holding customers' money yourself needs RBI authorisation.
+- **Server:** add a database, an SMS provider and the partner adapters; serve it over HTTPS; and set a strong `WEBHOOK_SECRET`. Remove the sandbox routes by not passing `sandbox` to `createApiServer`.
+- **App:** set `EXPO_PUBLIC_API_URL` to your HTTPS server. Change `com.legallions.epay` in `app/app.json` if you publish under a different name. Build store apps with EAS (`npx eas-cli@latest build`).
+- **Return links:** banks send payers back to `epay://payment-return`. Some gateways only accept `https://` return URLs; if so, host a page that redirects to the app link.
+- **iOS UPI apps:** iPhones have no UPI app chooser, so `app/src/lib/upi-links.ts` opens Google Pay, PhonePe or Paytm by name. Check these against your partner's iOS documentation.
+- **Business payees:** higher UPI limits apply only to payees that pass business verification (KYB) in an eligible NPCI category. Set `merchantCategory` on those users.
+- Never collect or store net banking credentials, and never split one payment into several UPI payments to get under the limit.

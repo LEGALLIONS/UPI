@@ -1,7 +1,7 @@
 {
-  "name": "ipay",
+  "name": "epay",
   "version": "0.1.0",
-  "description": "iPay: pay businesses by mobile number, above the UPI limit, through net banking, bank transfer or e-NACH",
+  "description": "ePay: pay businesses by mobile number, above the UPI limit, through net banking, bank transfer or e-NACH",
   "type": "module",
   "private": true,
   "engines": {

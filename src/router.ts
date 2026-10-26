@@ -68,7 +68,7 @@ export function planCollection(request: CollectionRequest, limits: RailLimits = 
   options.push({ method: 'netbanking', reason: "Log in on your bank's own page; your bank sets the limit" });
   options.push({
     method: 'bank_transfer',
-    reason: 'Send from your banking app to your own account number with us; no UPI limit',
+    reason: 'Send from your banking app to a dedicated account number; no UPI limit',
     rails: planPayout({ amount, urgent: true }, limits).map((option) => option.rail),
   });
 
