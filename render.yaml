@@ -1,0 +1,16 @@
+# Puts the ePay server online on Render (render.com), free plan:
+# Dashboard → New → Blueprint → pick this repository → Apply.
+# The free plan sleeps after 15 minutes without use and wakes on the next
+# request (about a minute). The server keeps data in memory, so sleeping or
+# redeploying wipes all accounts and payments.
+services:
+  - type: web
+    name: epay-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run server
+    healthCheckPath: /health
+    envVars:
+      - key: WEBHOOK_SECRET
+        generateValue: true

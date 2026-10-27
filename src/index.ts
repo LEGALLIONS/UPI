@@ -1,4 +1,6 @@
 export * from './money.ts';
+export * from './fees.ts';
+export * from './banks.ts';
 export * from './limits.ts';
 export * from './router.ts';
 export * from './upi-intent.ts';

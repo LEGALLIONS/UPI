@@ -1,15 +1,19 @@
 import type { Paise } from '../money.ts';
 import type { TransferRail } from '../router.ts';
 
-// What this project needs from a licensed partner (payment aggregator or bank).
-// Each interface maps to an API that Cashfree, Razorpay, Setu, Decentro and
-// others already offer; write one adapter per partner.
+// What ePay needs from partners. Payments go straight from the payer's bank to
+// the payee's, and the commission straight to ePay's own account, so ePay only
+// needs account verification (Cashfree, Setu, Decentro and others offer it),
+// credit notifications from its own bank, and, for payments with one approval,
+// API banking with the payer's bank.
 
 /** Account details reported by the bank itself, never typed in by the customer. */
 export interface VerifiedBankAccount {
   accountNumber: string;
   ifsc: string;
   holderName: string;
+  /** The UPI ID the ₹1 came from, so others can pay this account by UPI. */
+  vpa?: string;
 }
 
 export interface Customer {
@@ -18,10 +22,7 @@ export interface Customer {
   mobile: string;
 }
 
-/**
- * Who receives a payment. The partner settles straight to their verified
- * account (split settlement / linked accounts), so the money never sits with us.
- */
+/** Who receives a payment, straight into their verified account. */
 export interface Payee {
   id: string;
   name: string;
@@ -41,7 +42,7 @@ export type PennyDropResult =
 
 /**
  * Reverse penny drop: the customer pays ₹1 by UPI from their own app, and the
- * provider reports the account number, IFSC and name it came from (and refunds the ₹1).
+ * provider reports the account number, IFSC, name and UPI ID it came from (and refunds the ₹1).
  */
 export interface ReversePennyDropProvider {
   createRequest(input: { referenceId: string }): Promise<UpiPaymentRequest>;
@@ -49,60 +50,61 @@ export interface ReversePennyDropProvider {
   parsePennyDropWebhook(rawBody: string, signature: string): Promise<PennyDropResult>;
 }
 
-/** What a partner's payment webhook reports. */
-export type PaymentEvent =
-  /** A UPI or net banking order finished, or an e-NACH mandate was approved or refused. */
-  | { kind: 'order'; requestId: string; status: 'success' | 'failed' }
-  /** Money arrived in a virtual account. utr is the bank's reference for the transfer. */
-  | { kind: 'transfer'; virtualAccountNumber: string; amount: Paise; utr: string };
-
-export interface OrderInput {
-  orderId: string;
-  amount: Paise;
-  payer: Customer;
-  payee: Payee;
-}
-
-export interface PaymentGateway {
-  /** UPI through the gateway, so the payee's verified-category limits apply. */
-  createUpiOrder(input: OrderInput): Promise<UpiPaymentRequest>;
-  /** The redirect goes to the payer's bank's own login page; their credentials never reach us. */
-  createNetbankingOrder(input: OrderInput & { returnUrl: string }): Promise<{ requestId: string; redirectUrl: string }>;
-  /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
-  parsePaymentWebhook(rawBody: string, signature: string): Promise<PaymentEvent>;
-}
-
-export interface VirtualAccount {
+/** ePay's own bank account, where commissions are paid. It never changes, so payers add it as a beneficiary once. */
+export interface CommissionAccount {
   accountNumber: string;
   ifsc: string;
-  beneficiaryName: string;
+  name: string;
+  upiId: string;
 }
 
-export interface VirtualAccountProvider {
-  /**
-   * Same account every time for a payer and payee, so the payer adds it as a
-   * beneficiary in their bank once and every transfer matches up automatically.
-   */
-  getOrCreate(input: { payer: Customer; payee: Payee }): Promise<VirtualAccount>;
+/** Money arriving in ePay's own account, as its bank reports it. */
+export interface CreditEvent {
+  amount: Paise;
+  /** The bank's reference for the transfer. */
+  utr: string;
+  /** The UPI note or transfer remarks, where the payer puts the payment's reference. */
+  remarks: string;
 }
 
-export interface MandateProvider {
-  /** The payer approves on their bank's page; the bank then allows debits up to maxAmount. */
-  createEnachMandate(input: {
-    payer: Customer;
-    payerAccount: VerifiedBankAccount;
-    payee: Payee;
-    maxAmount: Paise;
-    returnUrl: string;
-  }): Promise<{ mandateId: string; authUrl: string }>;
+/** ePay's own bank telling ePay about each credit to its account (API banking). */
+export interface CreditNotifications {
+  /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
+  parseCreditWebhook(rawBody: string, signature: string): Promise<CreditEvent>;
 }
 
-export interface PayoutProvider {
-  send(input: {
-    payoutId: string;
-    amount: Paise;
-    rail: TransferRail;
-    beneficiary: VerifiedBankAccount;
-    narration: string;
-  }): Promise<{ providerRef: string; status: 'queued' | 'processing' }>;
+/** One part of a split payment: the amount to the payee, or the commission to ePay. */
+export interface SplitLeg {
+  part: 'payment' | 'commission';
+  amount: Paise;
+  rail: TransferRail;
+  beneficiary: { accountNumber: string; ifsc: string; name: string };
+  /** Goes in the transfer's remarks. */
+  reference: string;
+}
+
+/** What the payer's bank reports back. */
+export type BankEvent =
+  | { kind: 'link'; linkId: string; status: 'approved' | 'declined' }
+  | {
+      kind: 'split';
+      requestId: string;
+      /** Each part's outcome; utr is the bank's reference when it went through. */
+      legs: { part: SplitLeg['part']; status: 'success' | 'failed'; utr: string | null }[];
+    };
+
+/**
+ * A payer's current account connected to ePay through their bank's API
+ * (connected banking). ePay asks the bank to send both parts of a payment;
+ * the payer approves once, in their bank's app or net banking.
+ */
+export interface ConnectedBanking {
+  /** Whether ePay has an API agreement with this account's bank. */
+  supports(ifsc: string): boolean;
+  /** The payer approves ePay in their bank's net banking, once; the result comes by webhook. */
+  startLink(input: { customerId: string; account: VerifiedBankAccount }): Promise<{ linkId: string }>;
+  /** Puts both parts to the payer's bank for one approval; the outcome comes by webhook. */
+  requestSplitPayment(input: { linkId: string; legs: SplitLeg[] }): Promise<{ requestId: string }>;
+  /** Checks the webhook signature, then parses the body. Throws if the signature is wrong. */
+  parseBankWebhook(rawBody: string, signature: string): Promise<BankEvent>;
 }

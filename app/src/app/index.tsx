@@ -1,7 +1,8 @@
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { Body, Button, Card, ErrorText, Field, HeaderLink, METHOD_LABELS, Screen, SectionLabel, StatusChip } from '../components/ui';
+import { BankLinkCard } from '../components/bank-link';
+import { Body, Button, Card, ErrorText, Field, HeaderLink, Screen, SectionLabel, StatusChip } from '../components/ui';
 import type { OrderView, PayeeView } from '../lib/api';
 import { formatInr } from '../lib/money';
 import { useSession } from '../lib/session';
@@ -51,9 +52,13 @@ export default function Home() {
           <Text style={styles.accountDetail}>
             {me.account.maskedAccountNumber} · {me.account.ifsc}
           </Text>
+          {me.upiId ? <Text style={styles.accountDetail}>UPI: {me.upiId}</Text> : null}
           <Text style={styles.verified}>✓ Verified by your bank</Text>
+          {me.oneApproval === 'linked' ? <Text style={styles.verified}>✓ One-approval payments on</Text> : null}
         </View>
       ) : null}
+
+      <BankLinkCard />
 
       <SectionLabel>Pay someone</SectionLabel>
       <Card>
@@ -88,7 +93,7 @@ export default function Home() {
       {payments === null ? (
         <ActivityIndicator color={colors.blue} />
       ) : payments.length === 0 ? (
-        <Body muted>Payments you make show up here.</Body>
+        <Body muted>Payments you send or receive show up here.</Body>
       ) : (
         <Card style={styles.list}>
           {payments.map((order, index) => (
@@ -99,14 +104,14 @@ export default function Home() {
               style={({ pressed }) => [styles.row, index > 0 && styles.rowDivider, pressed && styles.pressed]}
             >
               <View style={styles.rowMain}>
-                <Text style={styles.rowName}>{order.payee.name}</Text>
+                <Text style={styles.rowName}>{order.role === 'payer' ? `To ${order.payee.name}` : `From ${order.payer.name}`}</Text>
                 <Text style={styles.rowMeta}>
-                  {METHOD_LABELS[order.method]} · {new Date(order.createdAt).toLocaleDateString('en-IN')}
+                  {order.reference} · {new Date(order.createdAt).toLocaleDateString('en-IN')}
                 </Text>
               </View>
               <View style={styles.rowEnd}>
                 <Text style={styles.rowAmount}>{formatInr(order.amount)}</Text>
-                <StatusChip status={order.status} />
+                <StatusChip status={order.status} role={order.role} commissionDue={isCommissionDue(order)} />
               </View>
             </Pressable>
           ))}
@@ -114,6 +119,10 @@ export default function Home() {
       )}
     </Screen>
   );
+}
+
+function isCommissionDue(order: OrderView): boolean {
+  return order.commissionPaid === false && order.status !== 'awaiting_transfer';
 }
 
 const styles = StyleSheet.create({

@@ -1,25 +1,25 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { DEFAULT_LIMITS, LAKH, CRORE, planCollection, planPayout, rupees } from '../src/index.ts';
+import { DEFAULT_LIMITS, LAKH, planCollection, planPayout, rupees } from '../src/index.ts';
 
 const methods = (amount: number, extra = {}) => planCollection({ amount, ...extra }).options.map((option) => option.method);
 
 describe('planCollection', () => {
   it('offers UPI first while the amount is within the ₹1 lakh limit', () => {
-    assert.deepEqual(methods(rupees(50_000)), ['upi', 'netbanking', 'bank_transfer']);
-    assert.deepEqual(methods(LAKH), ['upi', 'netbanking', 'bank_transfer']);
+    assert.deepEqual(methods(rupees(50_000)), ['upi', 'bank_transfer']);
+    assert.deepEqual(methods(LAKH), ['upi', 'bank_transfer']);
   });
 
   it('drops UPI one paisa over the limit and says why', () => {
     const plan = planCollection({ amount: LAKH + 1 });
-    assert.deepEqual(plan.options.map((option) => option.method), ['netbanking', 'bank_transfer']);
+    assert.deepEqual(plan.options.map((option) => option.method), ['bank_transfer']);
     assert.deepEqual(plan.unavailable, [{ method: 'upi', reason: 'Over the ₹1,00,000.00 UPI limit per payment' }]);
   });
 
   it('applies higher limits for a verified merchant category', () => {
-    assert.equal(methods(3 * LAKH)[0], 'netbanking');
+    assert.equal(methods(3 * LAKH)[0], 'bank_transfer');
     assert.equal(methods(3 * LAKH, { merchantCategory: 'business_payments' })[0], 'upi');
-    assert.equal(methods(3 * LAKH, { merchantCategory: 'jewellery' })[0], 'netbanking');
+    assert.equal(methods(3 * LAKH, { merchantCategory: 'jewellery' })[0], 'bank_transfer');
   });
 
   it('counts what the payer already paid by UPI today against the daily limit', () => {
@@ -32,11 +32,10 @@ describe('planCollection', () => {
     assert.equal(methods(5 * LAKH, { merchantCategory: 'business_payments', upiPaidToday: 50 * LAKH })[0], 'upi');
   });
 
-  it('puts e-NACH first for recurring payments, up to ₹1 crore', () => {
-    assert.deepEqual(methods(25 * LAKH, { recurring: true }), ['enach', 'netbanking', 'bank_transfer']);
-    const tooBig = planCollection({ amount: 2 * CRORE, recurring: true });
-    assert.equal(tooBig.options[0]?.method, 'netbanking');
-    assert.equal(tooBig.unavailable[0]?.method, 'enach');
+  it('offers only bank transfer when the payee has no UPI ID', () => {
+    const plan = planCollection({ amount: rupees(5_000), payeeHasUpi: false });
+    assert.deepEqual(plan.options.map((option) => option.method), ['bank_transfer']);
+    assert.deepEqual(plan.unavailable, [{ method: 'upi', reason: 'They have no UPI ID on ePay' }]);
   });
 
   it('lists the transfer rails that fit the amount', () => {
@@ -48,7 +47,7 @@ describe('planCollection', () => {
 
   it("uses the payer bank's own lower limit when given one", () => {
     const limits = { ...DEFAULT_LIMITS, upiDefault: { perTxn: rupees(25_000), perDay: rupees(25_000) } };
-    assert.equal(planCollection({ amount: rupees(30_000) }, limits).options[0]?.method, 'netbanking');
+    assert.equal(planCollection({ amount: rupees(30_000) }, limits).options[0]?.method, 'bank_transfer');
   });
 
   it('rejects amounts that are not a positive whole number of paise', () => {

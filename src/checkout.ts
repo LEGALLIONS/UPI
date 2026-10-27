@@ -1,63 +1,97 @@
-import type { VerifiedAccountStore } from './onboarding.ts';
-import type { Customer, MandateProvider, Payee, PaymentGateway, VirtualAccountProvider } from './providers/types.ts';
-import type { CollectionMethod, CollectionPlan, TransferRail } from './router.ts';
+import { DEFAULT_LIMITS, type RailLimits } from './limits.ts';
+import type { Paise } from './money.ts';
+import type { CommissionAccount, Payee, SplitLeg } from './providers/types.ts';
+import { planPayout, type CollectionPlan, type TransferRail } from './router.ts';
+import { buildUpiIntent } from './upi-intent.ts';
 
-export type PaymentInstruction =
-  | { method: 'upi'; requestId: string; upiIntent: string; expiresAt: string }
-  | { method: 'netbanking'; requestId: string; redirectUrl: string }
-  | { method: 'bank_transfer'; accountNumber: string; ifsc: string; beneficiaryName: string; rails: TransferRail[] }
-  | { method: 'enach'; mandateId: string; authUrl: string };
-
-export interface CheckoutProviders {
-  gateway: PaymentGateway;
-  virtualAccounts: VirtualAccountProvider;
-  mandates: MandateProvider;
-  accounts: VerifiedAccountStore;
+export interface TransferDetails {
+  amount: Paise;
+  /** Opens the payer's UPI app with everything filled in. null when UPI doesn't fit. */
+  upiIntent: string | null;
+  bankTransfer: { accountNumber: string; ifsc: string; beneficiaryName: string; rails: TransferRail[] };
 }
 
-export interface StartPaymentInput {
-  orderId: string;
-  payer: Customer;
-  payee: Payee;
-  /** From planCollection, for the same order. */
-  plan: CollectionPlan;
-  /** The option the payer picked. Must be one of plan.options. */
-  method: CollectionMethod;
-  /** Where the bank sends the payer back to after net banking or e-NACH approval. */
-  returnUrl: string;
+/**
+ * What the payer sends, both at once and in either order: the amount straight
+ * to the payee's own account, and ePay's commission straight to ePay's own
+ * account. ePay never holds the amount, so there is no settlement wait.
+ */
+export interface PaymentInstructions {
+  /** Goes in the UPI note or transfer remarks of both, so each can be matched to this payment. */
+  reference: string;
+  payment: TransferDetails;
+  commission: TransferDetails;
 }
 
-/** The payer picked a method the plan ruled out, or never offered. */
-export class MethodUnavailableError extends Error {}
+/** "EPAY" and 8 letters or digits, e.g. EPAY9DCCD008. */
+export function referenceFor(orderId: string): string {
+  return `EPAY${orderId.replace(/[^a-z0-9]/gi, '').slice(-8).toUpperCase()}`;
+}
 
-/** Turns the payer's chosen option into what to show them next. */
-export async function startPayment(input: StartPaymentInput, providers: CheckoutProviders): Promise<PaymentInstruction> {
-  const { orderId, payer, payee, plan, method, returnUrl } = input;
-  const option = plan.options.find((candidate) => candidate.method === method);
-  if (!option) {
-    const why = plan.unavailable.find((candidate) => candidate.method === method)?.reason ?? 'not offered for this payment';
-    throw new MethodUnavailableError(`Can't pay by ${method}: ${why}`);
-  }
-  const { amount } = plan;
+/** The payment reference in a UPI note or transfer remarks, however the payer spaced or cased it. */
+export function findReference(remarks: string): string | null {
+  return /EPAY[A-Z0-9]{8}/.exec(remarks.toUpperCase().replace(/[^A-Z0-9]/g, ''))?.[0] ?? null;
+}
 
-  switch (option.method) {
-    case 'upi': {
-      const request = await providers.gateway.createUpiOrder({ orderId, amount, payer, payee });
-      return { method: 'upi', ...request };
-    }
-    case 'netbanking': {
-      const order = await providers.gateway.createNetbankingOrder({ orderId, amount, payer, payee, returnUrl });
-      return { method: 'netbanking', ...order };
-    }
-    case 'bank_transfer': {
-      const account = await providers.virtualAccounts.getOrCreate({ payer, payee });
-      return { method: 'bank_transfer', ...account, rails: option.rails ?? [] };
-    }
-    case 'enach': {
-      const payerAccount = await providers.accounts.getAccount(payer.id);
-      if (!payerAccount) throw new Error(`Verify ${payer.id}'s bank account before setting up e-NACH`);
-      const mandate = await providers.mandates.createEnachMandate({ payer, payerAccount, payee, maxAmount: amount, returnUrl });
-      return { method: 'enach', ...mandate };
-    }
-  }
+export function paymentInstructions(
+  input: { orderId: string; payee: Payee; plan: CollectionPlan; fee: Paise; commissionAccount: CommissionAccount },
+  limits: RailLimits = DEFAULT_LIMITS,
+): PaymentInstructions {
+  const { orderId, payee, plan, fee, commissionAccount } = input;
+  const reference = referenceFor(orderId);
+  const upiFits = plan.options.some((option) => option.method === 'upi');
+  const transfer = plan.options.find((option) => option.method === 'bank_transfer');
+  const { account } = payee;
+  return {
+    reference,
+    payment: {
+      amount: plan.amount,
+      upiIntent:
+        upiFits && account.vpa
+          ? buildUpiIntent({ payeeVpa: account.vpa, payeeName: payee.name, amount: plan.amount, note: reference })
+          : null,
+      bankTransfer: {
+        accountNumber: account.accountNumber,
+        ifsc: account.ifsc,
+        beneficiaryName: account.holderName,
+        rails: transfer?.rails ?? [],
+      },
+    },
+    commission: {
+      amount: fee,
+      // ePay's UPI ID is a business one, so its link can carry the reference as the merchant reference too.
+      upiIntent:
+        fee <= limits.upiDefault.perTxn
+          ? buildUpiIntent({
+              payeeVpa: commissionAccount.upiId,
+              payeeName: commissionAccount.name,
+              amount: fee,
+              transactionRef: reference,
+              note: reference,
+            })
+          : null,
+      bankTransfer: {
+        accountNumber: commissionAccount.accountNumber,
+        ifsc: commissionAccount.ifsc,
+        beneficiaryName: commissionAccount.name,
+        rails: planPayout({ amount: fee, urgent: true }, limits).map((option) => option.rail),
+      },
+    },
+  };
+}
+
+/** The parts still to send, as legs for the payer's bank, each on the fastest rail that fits. */
+export function splitLegs(instructions: PaymentInstructions, parts: SplitLeg['part'][]): SplitLeg[] {
+  return parts.map((part) => {
+    const { amount, bankTransfer } = instructions[part];
+    const rail = bankTransfer.rails[0];
+    if (!rail) throw new Error(`No bank transfer rail for the ${part}`);
+    return {
+      part,
+      amount,
+      rail,
+      beneficiary: { accountNumber: bankTransfer.accountNumber, ifsc: bankTransfer.ifsc, name: bankTransfer.beneficiaryName },
+      reference: instructions.reference,
+    };
+  });
 }

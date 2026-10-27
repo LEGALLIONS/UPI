@@ -45,7 +45,6 @@ function RootNavigator() {
         <Stack.Screen name="index" />
         <Stack.Screen name="pay" options={{ title: 'Pay' }} />
         <Stack.Screen name="payment/[id]" options={{ title: 'Payment' }} />
-        <Stack.Screen name="payment-return" options={{ headerShown: false }} />
       </Stack.Protected>
     </Stack>
   );
