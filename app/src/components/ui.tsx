@@ -182,7 +182,7 @@ const STATUS_CHIPS: Record<OrderStatus, Record<Role, [label: string, tone: ChipT
   not_received: { payer: ['Not received', 'problem'], payee: ['Not received', 'problem'] },
 };
 
-/** commissionDue: the payer has sent the money but ePay's commission hasn't arrived. */
+/** commissionDue: the payer has sent the amount but ePay's commission hasn't arrived. */
 export function StatusChip({ status, role, commissionDue = false }: { status: OrderStatus; role: Role; commissionDue?: boolean }) {
   const [label, tone]: [string, ChipTone] = commissionDue ? ['Commission due', 'action'] : STATUS_CHIPS[status][role];
   return (

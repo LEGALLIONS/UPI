@@ -56,15 +56,11 @@ export function createApi(token: string | null) {
     signIn: (mobile: string, code: string) => request<SessionResponse>('POST', '/auth/session', null, { mobile, code }),
     me: () => request<MeView>('GET', '/me', token),
     startVerification: () => request<UpiPaymentRequest>('POST', '/me/verification', token),
-    /** Starts connecting the payer's current account through their bank's API, for one-approval payments. */
-    linkBank: () => request<MeView>('POST', '/me/bank-link', token, {}),
     findPayee: (mobile: string) => request<PayeeView>('GET', `/payees/${encodeURIComponent(mobile)}`, token),
     plan: (body: PlanRequest) => request<PlanView>('POST', '/payments/plan', token, body),
     pay: (body: PaymentRequest) => request<OrderView>('POST', '/payments', token, body),
     payments: () => request<OrderView[]>('GET', '/payments', token),
     payment: (id: string) => request<OrderView>('GET', `/payments/${encodeURIComponent(id)}`, token),
-    /** Asks the payer's bank to send whatever is left of this payment, for one approval. */
-    bankPay: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/bank-pay`, token, {}),
     markSent: (id: string, utr: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, { utr }),
     markReceived: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/received`, token, {}),
     markNotReceived: (id: string) =>
@@ -72,11 +68,6 @@ export function createApi(token: string | null) {
     sandbox: {
       pennyDrop: (requestId: string, holderName: string) =>
         request<MeView>('POST', '/sandbox/penny-drop', token, { requestId, holderName }),
-      /** As if the payer approved or declined linking ePay in their bank. */
-      bankLink: (outcome: 'approve' | 'decline') => request<MeView>('POST', '/sandbox/bank-link', token, { outcome }),
-      /** As if the payer's bank sent (or didn't send) the parts it was asked to. */
-      bank: (orderId: string, outcome: 'approve' | 'decline' | 'commission_fails') =>
-        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/bank`, token, { outcome }),
       /** As if ePay's bank reported the commission arriving. */
       payCommission: (orderId: string) =>
         request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/commission`, token, {}),
@@ -85,3 +76,8 @@ export function createApi(token: string | null) {
 }
 
 export type Api = ReturnType<typeof createApi>;
+
+/** The payer has sent the amount but ePay's commission hasn't arrived, so their next payment waits. Matches the server. */
+export function isCommissionDue(order: OrderView): boolean {
+  return order.commissionPaid === false && (order.status === 'sent' || order.status === 'received');
+}

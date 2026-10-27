@@ -1,22 +1,11 @@
 // The HTTP API between the ePay app and this server. The app imports these types too.
-import type { TransferDetails } from '../src/checkout.ts';
+import type { PaymentInstructions, TransferDetails } from '../src/checkout.ts';
 import type { Paise } from '../src/money.ts';
 import type { MaskedBankAccount } from '../src/onboarding.ts';
 import type { UpiPaymentRequest } from '../src/providers/types.ts';
 import type { CollectionMethod, CollectionPlan } from '../src/router.ts';
 
-export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, TransferDetails, UpiPaymentRequest };
-
-/**
- * What the payer sees: where to send the amount, and only the amount of the
- * commission with a UPI link for it. ePay's account details stay on the server.
- */
-export interface PayerInstructions {
-  reference: string;
-  payment: TransferDetails;
-  /** upiIntent is null when the commission is over the UPI limit; it then goes with one approval. */
-  commission: { amount: Paise; upiIntent: string | null };
-}
+export type { CollectionMethod, CollectionPlan, MaskedBankAccount, Paise, PaymentInstructions, TransferDetails, UpiPaymentRequest };
 
 export interface ErrorResponse {
   error: string;
@@ -56,11 +45,6 @@ export interface MeView {
   upiId: string | null;
   /** "HDFC Bank", from the IFSC; null before verification or for a bank ePay doesn't know. */
   bankName: string | null;
-  /**
-   * One-approval payments through the bank's API: unsupported (no agreement with
-   * this bank yet), not_linked, pending (waiting for approval in the bank), linked, declined.
-   */
-  oneApproval: 'unsupported' | 'not_linked' | 'pending' | 'linked' | 'declined';
 }
 
 /** Shown to a payer before they pay, so they can check they have the right person. */
@@ -77,7 +61,7 @@ export interface PlanRequest {
   amount: Paise;
 }
 
-/** The ways to send the amount, plus ePay's commission, which the payer sends at the same time to ePay's account. */
+/** The ways to send the amount, plus ePay's commission, which the payer sends by UPI once the amount has gone. */
 export interface PlanView extends CollectionPlan {
   /** What the payer sends ePay, GST included. */
   fee: Paise;
@@ -114,12 +98,8 @@ export interface OrderView {
   status: OrderStatus;
   /** Whether ePay's bank has reported the commission arriving. null for the payee, who doesn't pay it. */
   commissionPaid: boolean | null;
-  /** Payer only: where to send the amount, and the commission to pay. */
-  instructions: PayerInstructions | null;
-  /** Payer only: whatever is still to send can go to their bank for one approval now. */
-  oneApproval: boolean;
-  /** Payer only: the latest request to their bank, if any. */
-  bankRequest: { status: 'pending' | 'done' | 'failed'; parts: ('payment' | 'commission')[]; failedParts: ('payment' | 'commission')[] } | null;
+  /** Payer only: where to send the amount, and then the commission to pay. */
+  instructions: PaymentInstructions | null;
   /** Short code in the UPI note or transfer remarks, for matching the transfers to this payment. */
   reference: string;
   /** The bank's reference for the transfer, as the payer gave it. */
@@ -135,11 +115,6 @@ export interface SandboxPennyDropRequest {
   requestId: string;
   /** The name the pretend bank reports for the account. */
   holderName?: string;
-}
-
-export interface SandboxBankRequest {
-  /** commission_fails: the amount goes through but the commission doesn't. */
-  outcome?: 'approve' | 'decline' | 'commission_fails';
 }
 
 export interface SandboxCommissionRequest {

@@ -1,9 +1,8 @@
 import { router, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import { BankLinkCard } from '../components/bank-link';
-import { Body, Button, Card, ErrorText, Field, HeaderLink, Screen, SectionLabel, StatusChip } from '../components/ui';
-import type { OrderView, PayeeView } from '../lib/api';
+import { Body, Button, Card, ErrorText, Field, HeaderLink, Screen, SectionLabel, StatusChip, Title } from '../components/ui';
+import { isCommissionDue, type OrderView, type PayeeView } from '../lib/api';
 import { formatInr } from '../lib/money';
 import { useSession } from '../lib/session';
 import { colors, radius } from '../lib/theme';
@@ -15,6 +14,8 @@ export default function Home() {
   const [payee, setPayee] = useState<PayeeView | null>(null);
   const [payments, setPayments] = useState<OrderView[] | null>(null);
   const lookup = useAction();
+  // The next payment waits until ePay's commission for the last one has arrived.
+  const owed = payments?.find((order) => order.role === 'payer' && isCommissionDue(order));
 
   useFocusEffect(
     useCallback(() => {
@@ -54,40 +55,48 @@ export default function Home() {
           </Text>
           {me.upiId ? <Text style={styles.accountDetail}>UPI: {me.upiId}</Text> : null}
           <Text style={styles.verified}>✓ Verified by your bank</Text>
-          {me.oneApproval === 'linked' ? <Text style={styles.verified}>✓ One-approval payments on</Text> : null}
         </View>
       ) : null}
 
-      <BankLinkCard />
-
       <SectionLabel>Pay someone</SectionLabel>
-      <Card>
-        <Field
-          label="Their mobile number"
-          prefix="+91"
-          keyboardType="phone-pad"
-          maxLength={14}
-          placeholder="98765 43210"
-          value={mobile}
-          onChangeText={(text) => {
-            setMobile(text);
-            setPayee(null);
-          }}
-          onSubmitEditing={find}
-        />
-        <Button title="Find" variant="secondary" onPress={find} busy={lookup.busy} disabled={mobile.replace(/\D/g, '').length < 10} />
-        <ErrorText error={lookup.error} />
-        {payee ? (
-          <View style={styles.payee}>
-            <Body muted>Name as their bank has it</Body>
-            <Text style={styles.payeeName}>{payee.name}</Text>
-            <Body muted>
-              {payee.maskedAccountNumber} · {payee.ifsc}
-            </Body>
-            <Button title={`Pay ${payee.name}`} onPress={() => pay(payee)} />
-          </View>
-        ) : null}
-      </Card>
+      {owed ? (
+        <Card>
+          <Title>Pay ePay's commission first</Title>
+          <Body>
+            Your {formatInr(owed.amount)} to {owed.payee.name} has gone. Pay ePay's {formatInr(owed.fee)} commission (incl. GST) to
+            make your next payment.
+          </Body>
+          <Button title={`Pay ${formatInr(owed.fee)} commission`} onPress={() => router.push(`/payment/${owed.id}`)} />
+        </Card>
+      ) : (
+        <Card>
+          <Field
+            label="Their mobile number"
+            prefix="+91"
+            keyboardType="phone-pad"
+            maxLength={14}
+            placeholder="98765 43210"
+            value={mobile}
+            onChangeText={(text) => {
+              setMobile(text);
+              setPayee(null);
+            }}
+            onSubmitEditing={find}
+          />
+          <Button title="Find" variant="secondary" onPress={find} busy={lookup.busy} disabled={mobile.replace(/\D/g, '').length < 10} />
+          <ErrorText error={lookup.error} />
+          {payee ? (
+            <View style={styles.payee}>
+              <Body muted>Name as their bank has it</Body>
+              <Text style={styles.payeeName}>{payee.name}</Text>
+              <Body muted>
+                {payee.maskedAccountNumber} · {payee.ifsc}
+              </Body>
+              <Button title={`Pay ${payee.name}`} onPress={() => pay(payee)} />
+            </View>
+          ) : null}
+        </Card>
+      )}
 
       <SectionLabel>Recent payments</SectionLabel>
       {payments === null ? (
@@ -119,10 +128,6 @@ export default function Home() {
       )}
     </Screen>
   );
-}
-
-function isCommissionDue(order: OrderView): boolean {
-  return order.commissionPaid === false && order.status !== 'awaiting_transfer';
 }
 
 const styles = StyleSheet.create({

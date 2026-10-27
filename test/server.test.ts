@@ -67,7 +67,7 @@ describe('ePay API (sandbox)', () => {
     assert.equal(plan.body.gstIncluded, true);
   });
 
-  it('shows the amount and the commission together; the payee confirms; the commission is matched from the bank', async () => {
+  it('takes the amount first, then the commission; the next payment waits on the commission; the payee confirms', async () => {
     const created = await pay(payer, 3 * LAKH);
     assert.equal(created.status, 201);
     const order = created.body;
@@ -107,20 +107,25 @@ describe('ePay API (sandbox)', () => {
 
     const blocked = await call<{ error: string }>('POST', '/payments', { token: payer, body: { payeeId: payee.id, amount: LAKH } });
     assert.equal(blocked.status, 409);
-    assert.match(blocked.body.error, new RegExp(order.reference));
+    assert.match(blocked.body.error, new RegExp(`₹600\\.00 commission for your payment ${order.reference}`));
 
-    assert.equal((await payCommission(payer, order.id)).body.commissionPaid, true);
-
+    // While the payee says it hasn't arrived, the commission isn't due; it is again once the payer re-sends.
     assert.equal((await step(payer, order.id, 'received')).status, 403);
     assert.equal((await step(supplier, order.id, 'not-received')).body.status, 'not_received');
+    const payerId = deps.store.getUserByMobile('9000000001')!.id;
+    assert.deepEqual(deps.store.unpaidCommissions(payerId), []);
     assert.equal((await step(payer, order.id, 'sent', { utr: 'HDFCR52026102612' })).body.status, 'sent');
+    assert.equal(deps.store.unpaidCommissions(payerId).length, 1);
+
+    assert.equal((await payCommission(payer, order.id)).body.commissionPaid, true);
+    assert.deepEqual(deps.store.unpaidCommissions(payerId), []);
     const received = await step(supplier, order.id, 'received');
     assert.equal(received.body.status, 'received');
     assert.equal(received.body.utr, 'HDFCR52026102612');
     assert.equal((await step(supplier, order.id, 'received')).status, 409);
   });
 
-  it("sends UPI straight to the payee's own UPI ID when it fits; the commission can come first", async () => {
+  it("sends UPI straight to the payee's own UPI ID when it fits; a commission that arrives early still counts", async () => {
     const order = (await pay(payer, rupees(50_000))).body;
     const upi = order.instructions?.payment.upiIntent ?? '';
     assert.match(upi, /^upi:\/\/pay\?pa=9000000002%40sandbox&pn=MEENA%20STEELS&am=50000\.00&cu=INR&tn=EPAY/);
