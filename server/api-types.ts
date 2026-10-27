@@ -76,9 +76,10 @@ export type PaymentRequest = PlanRequest;
 /**
  * The payment itself; the commission is tracked separately in commissionPaid.
  * awaiting_transfer: the payer sends the amount straight to the payee's bank.
- * sent: the payer has given the bank reference; the payee checks their account.
- * received: the payee has confirmed. Done.
- * not_received: the payee can't find it; the payer checks and gives the reference again.
+ * sent: the payer says it has gone; the payee checks their account.
+ * received: the payee has confirmed it arrived (they can before the payer says it has gone). Done.
+ * not_received: the payee can't find it; the payer checks with their bank and says it has gone again.
+ * Once it's sent or received, ePay's commission is due.
  */
 export type OrderStatus = 'awaiting_transfer' | 'sent' | 'received' | 'not_received';
 
@@ -102,13 +103,7 @@ export interface OrderView {
   instructions: PaymentInstructions | null;
   /** Short code in the UPI note or transfer remarks, for matching the transfers to this payment. */
   reference: string;
-  /** The bank's reference for the transfer, as the payer gave it. */
-  utr: string | null;
   createdAt: string;
-}
-
-export interface SentRequest {
-  utr: string;
 }
 
 export interface SandboxPennyDropRequest {

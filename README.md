@@ -11,10 +11,10 @@ ePay earns a **0.2% commission, GST included**, on each payment, on top of the a
 1. **Sign in** with mobile number and OTP.
 2. **Verify your bank account** by paying ₹1 by UPI. The bank reports the account number, IFSC, name and UPI ID the ₹1 came from (a *reverse penny drop*), and the ₹1 is refunded. Because these come from the bank, nobody can pass themselves off as another business, and payments to you land in the right account.
 3. **Find who to pay** by their mobile number. Only verified ePay users show up, with their name as their bank has it.
-4. **Enter the amount.** ePay shows the total: the amount, plus its commission (0.2% including GST, at least ₹1).
-5. **Step 1: send the amount**, straight to the payee's verified UPI ID (within the UPI limit) or account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT. The app shows a UPI button where UPI fits and the payee's bank details to copy. The payer then enters the transfer's UTR. Nobody links a bank account to ePay.
-6. **Step 2: pay the commission.** Once the amount has gone, the app asks for ePay's commission: a single "Pay with UPI" button, whose link carries ePay's UPI ID and the payment's reference (e.g. `EPAY2C76CDDE`). The payer sees only the amount: ePay's account number and IFSC never reach the app. A commission over the UPI limit (on payments above ₹5 crore) is paid by arrangement with ePay.
-7. **The payee confirms** in the app that the amount arrived. If it hasn't, they tap "Not received yet" and the payer checks with their bank. The commission isn't due while they do.
+4. **Enter the amount.** As it's typed, ePay shows its commission right below it (0.2% including GST, at least ₹1) and the total.
+5. **Step 1: send the amount**, straight to the payee's verified UPI ID (within the UPI limit) or account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT. The app shows a UPI button where UPI fits and the payee's bank details to copy. Then the payer taps "I've sent it": there is no bank reference (UTR) to type. Nobody links a bank account to ePay.
+6. **Step 2: pay the commission.** As soon as the payer says the amount has gone, or the payee confirms it arrived (whichever comes first), the app asks for ePay's commission by itself: a single "Pay with UPI" button, whose link carries ePay's UPI ID and the payment's reference (e.g. `EPAY2C76CDDE`). The payer sees only the amount: ePay's account number and IFSC never reach the app. A commission over the UPI limit (on payments above ₹5 crore) is paid by arrangement with ePay.
+7. **The payee confirms** in the app that the amount arrived; they can do this before the payer says anything. If the payer says it has gone and it hasn't arrived, the payee taps "Not received yet" and the payer checks with their bank. The commission isn't due while they do.
 8. **The commission is confirmed** by ePay's own bank reporting it arriving, matched by the reference. Until it's confirmed, the payer can't start another payment: the home screen asks them to pay it first.
 
 ## What's in the repo
@@ -28,7 +28,7 @@ ePay earns a **0.2% commission, GST included**, on each payment, on top of the a
 
 ## Try it on your phone
 
-Both run in **sandbox mode**: no real money moves, and each step that would involve a bank has a "Simulate" button. When asked for a bank reference, type any 12 digits. Commissions go to a pretend ePay account until you set your own (see below).
+Both run in **sandbox mode**: no real money moves, and each step that would involve a bank has a "Simulate" button. Commissions go to a pretend ePay account until you set your own (see below).
 
 You need Node 22.18 or later, and the free **Expo Go** app on your phone (Play Store or App Store). Your phone and computer must be on the same Wi-Fi.
 
@@ -102,7 +102,7 @@ npm run typecheck
 - **Commission notifications:** ask your bank for API banking credit notifications (or a statement API) on that account, and point them at `/webhooks/commission`. Until then, commissions can't be confirmed automatically. A credit without the reference in its remarks is logged for a person to match.
 - **GST:** the 0.2% includes GST (18%), so on ₹600 ePay's own share is ₹508.47 and ₹91.53 is GST. To add GST on top instead (₹708 on a ₹3 lakh payment), set `gstIncluded: false` in `DEFAULT_FEE_POLICY` in `src/fees.ts` and redeploy the server; the app's pay screen then reads "0.2% + GST" without a new APK. Issue GST invoices for the commissions, and check the treatment with your accountant.
 - **Payee confirmation:** the payee still confirms receipt by hand. With a payee's consent, their bank's API can notify ePay of incoming credits so this happens automatically.
-- **Disputes:** payments go bank to bank, so a payment marked "Not received" is settled between payer and payee with their banks. Keep the UTRs, and have a support contact for these cases.
+- **Disputes:** payments go bank to bank, so a payment marked "Not received" is settled between payer and payee with their banks. Both sides' bank statements show the transfer with the payment's reference; have a support contact for these cases.
 - **UPI to personal UPI IDs:** some UPI apps restrict payment links that pay a person rather than a merchant. If that happens, bank transfer always works; payees with a business (merchant) UPI ID avoid it.
 - **Server:** add a database, an SMS provider and the partner adapters; serve it over HTTPS; and set a strong `WEBHOOK_SECRET`. Remove the sandbox routes by not passing `sandbox` to `createApiServer`.
 - **App:** set `EXPO_PUBLIC_API_URL` to your HTTPS server. Change `com.legallions.epay` in `app/app.json` if you publish under a different name. Build store apps with EAS (`npx eas-cli@latest build`). The APK from the **Android APK** workflow is signed with React Native's standard debug key: fine for installing directly, but the Play Store needs your own signing key.

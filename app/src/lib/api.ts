@@ -61,7 +61,7 @@ export function createApi(token: string | null) {
     pay: (body: PaymentRequest) => request<OrderView>('POST', '/payments', token, body),
     payments: () => request<OrderView[]>('GET', '/payments', token),
     payment: (id: string) => request<OrderView>('GET', `/payments/${encodeURIComponent(id)}`, token),
-    markSent: (id: string, utr: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, { utr }),
+    markSent: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, {}),
     markReceived: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/received`, token, {}),
     markNotReceived: (id: string) =>
       request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/not-received`, token, {}),

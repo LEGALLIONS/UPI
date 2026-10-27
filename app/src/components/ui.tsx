@@ -176,7 +176,7 @@ type Role = 'payer' | 'payee';
 
 // What each step means to the person looking: something for them to do, or for the other side.
 const STATUS_CHIPS: Record<OrderStatus, Record<Role, [label: string, tone: ChipTone]>> = {
-  awaiting_transfer: { payer: ['Send now', 'action'], payee: ['Not sent yet', 'waiting'] },
+  awaiting_transfer: { payer: ['Send now', 'action'], payee: ['Incoming', 'waiting'] },
   sent: { payer: ['Awaiting confirmation', 'waiting'], payee: ['Confirm receipt', 'action'] },
   received: { payer: ['Paid', 'done'], payee: ['Received', 'done'] },
   not_received: { payer: ['Not received', 'problem'], payee: ['Not received', 'problem'] },

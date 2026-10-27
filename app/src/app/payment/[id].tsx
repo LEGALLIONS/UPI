@@ -1,7 +1,7 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { StyleSheet, Text } from 'react-native';
-import { Banner, Body, Button, Card, DetailRow, ErrorText, Field, Loading, Screen, StatusChip, Title } from '../../components/ui';
+import { Banner, Body, Button, Card, DetailRow, ErrorText, Loading, Screen, StatusChip, Title } from '../../components/ui';
 import { isCommissionDue, type OrderView, type TransferDetails } from '../../lib/api';
 import { amountInWords, formatInr } from '../../lib/money';
 import { useSession } from '../../lib/session';
@@ -77,7 +77,6 @@ export default function Payment() {
         {isPayer ? <DetailRow label="Their account" value={`${order.payee.maskedAccountNumber} · ${order.payee.ifsc}`} /> : null}
         {isPayer ? <DetailRow label="ePay commission, incl. GST" value={formatInr(order.fee)} /> : null}
         <DetailRow label="Reference" value={order.reference} />
-        {order.utr ? <DetailRow label="Bank reference (UTR)" value={order.utr} copyable /> : null}
       </Card>
 
       {order.status === 'received' && !commissionDue ? (
@@ -99,7 +98,6 @@ interface StepProps {
 function PayerStep({ order, onChange }: StepProps) {
   const { api } = useSession();
   const { run, busy, error } = useAction();
-  const [utr, setUtr] = useState('');
   const { instructions } = order;
   if (!instructions) return null;
   const payee = order.payee.name;
@@ -141,23 +139,13 @@ function PayerStep({ order, onChange }: StepProps) {
       </TransferCard>
 
       <Card>
-        <Title>After sending the {formatInr(order.amount)}</Title>
-        <Field
-          label="Its bank reference (UTR or UPI Ref No.)"
-          hint="Your bank app shows it once the money has gone. Sandbox: type any 12 digits."
-          autoCapitalize="characters"
-          autoCorrect={false}
-          maxLength={26}
-          value={utr}
-          onChangeText={setUtr}
-        />
+        <Title>Sent the {formatInr(order.amount)}?</Title>
+        <Body muted>
+          Tap once your bank or UPI app shows it has gone. Nothing to type. If {payee} confirms it first, this moves on by
+          itself.
+        </Body>
         <ErrorText error={error} />
-        <Button
-          title="I've sent it"
-          onPress={() => run(async () => onChange(await api.markSent(order.id, utr)))}
-          busy={busy}
-          disabled={utr.replace(/\s/g, '').length < 12}
-        />
+        <Button title="I've sent it" onPress={() => run(async () => onChange(await api.markSent(order.id)))} busy={busy} />
       </Card>
 
       {order.commissionPaid ? null : (
@@ -254,10 +242,14 @@ function PayeeStep({ order, onChange }: StepProps) {
   switch (order.status) {
     case 'awaiting_transfer':
       return (
-        <Banner tone="info">
-          {payer} is paying you {formatInr(order.amount)}, straight into your account ({order.payee.maskedAccountNumber}). You'll
-          be asked to confirm once they've sent it.
-        </Banner>
+        <Card>
+          <Title>Has {formatInr(order.amount)} arrived?</Title>
+          <Body>
+            {payer} is paying you straight into your account {order.payee.maskedAccountNumber}. Confirm here as soon as it arrives.
+          </Body>
+          <ErrorText error={error} />
+          <Button title="Yes, I received it" onPress={confirm} busy={busy} />
+        </Card>
       );
 
     case 'sent':
@@ -265,8 +257,8 @@ function PayeeStep({ order, onChange }: StepProps) {
         <Card>
           <Title>Did you receive {formatInr(order.amount)}?</Title>
           <Body>
-            {payer} says they've sent it. Check your bank account {order.payee.maskedAccountNumber} for this amount
-            {order.utr ? ` and the reference ${order.utr}` : ''}.
+            {payer} says they've sent it. Check your bank account {order.payee.maskedAccountNumber} for this amount, with{' '}
+            {order.reference} in the remarks.
           </Body>
           <ErrorText error={error} />
           <Button title="Yes, I received it" onPress={confirm} busy={busy} />

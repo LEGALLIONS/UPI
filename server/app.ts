@@ -91,8 +91,6 @@ interface Context {
 type Route = [method: string, path: RegExp, handler: (ctx: Context) => Promise<Reply>];
 
 const MAX_BODY_BYTES = 64 * 1024;
-/** UPI and IMPS references are 12 digits; NEFT and RTGS UTRs are 16 or 22 letters and digits. */
-const UTR = /^[A-Z0-9]{12,22}$/;
 
 const STATUS_WORDS: Record<OrderStatus, string> = {
   awaiting_transfer: 'waiting for the money to be sent',
@@ -159,7 +157,6 @@ export function createApiServer(deps: ApiDeps): Server {
       commissionPaid: role === 'payer' ? order.commissionPaid : null,
       instructions: role === 'payer' ? order.instructions : null,
       reference: order.instructions.reference,
-      utr: order.utr,
       createdAt: order.createdAt.toISOString(),
     };
   }
@@ -348,17 +345,14 @@ export function createApiServer(deps: ApiDeps): Server {
     [
       'POST',
       /^\/payments\/([^/]+)\/sent$/,
-      async (ctx) => {
-        const utr = field(parseJson(ctx.body), 'utr').replace(/\s/g, '').toUpperCase();
-        if (!UTR.test(utr)) throw new HttpError(400, 'Enter the reference exactly as your bank shows it: 12 to 22 letters and numbers');
-        return transition(ctx, 'payer', ['awaiting_transfer', 'not_received'], () => ({ status: 'sent', utr }));
-      },
+      async (ctx) => transition(ctx, 'payer', ['awaiting_transfer', 'not_received'], () => ({ status: 'sent' })),
     ],
 
     [
       'POST',
       /^\/payments\/([^/]+)\/received$/,
-      async (ctx) => transition(ctx, 'payee', ['sent', 'not_received'], () => ({ status: 'received' })),
+      // The payee can confirm as soon as the money arrives, whether or not the payer has said they sent it.
+      async (ctx) => transition(ctx, 'payee', ['awaiting_transfer', 'sent', 'not_received'], () => ({ status: 'received' })),
     ],
 
     [

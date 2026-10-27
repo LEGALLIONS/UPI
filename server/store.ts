@@ -26,11 +26,10 @@ export interface Order {
   /** Where the payer sends the amount, and then the commission, worked out when the order is made. */
   instructions: PaymentInstructions;
   status: OrderStatus;
-  utr: string | null;
   createdAt: Date;
 }
 
-export type OrderChanges = Partial<Pick<Order, 'status' | 'utr' | 'commissionPaid' | 'commissionUtr'>>;
+export type OrderChanges = Partial<Pick<Order, 'status' | 'commissionPaid' | 'commissionUtr'>>;
 
 export function newOrderId(): string {
   return `ord_${randomUUID()}`;
@@ -60,13 +59,12 @@ export class MemoryStore {
     return id ? this.#users.get(id) : undefined;
   }
 
-  createOrder(fields: Omit<Order, 'commissionPaid' | 'commissionUtr' | 'status' | 'utr' | 'createdAt'>): Order {
+  createOrder(fields: Omit<Order, 'commissionPaid' | 'commissionUtr' | 'status' | 'createdAt'>): Order {
     const order: Order = {
       ...fields,
       commissionPaid: false,
       commissionUtr: null,
       status: 'awaiting_transfer',
-      utr: null,
       createdAt: new Date(),
     };
     this.#orders.set(order.id, order);

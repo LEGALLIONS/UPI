@@ -99,11 +99,9 @@ describe('ePay API (sandbox)', () => {
     assert.equal(asPayee.body.reference, order.reference);
     assert.equal(asPayee.body.payer.name, 'ARUN TRADERS');
 
-    assert.equal((await step(supplier, order.id, 'sent', { utr: '412345678901' })).status, 403);
-    assert.equal((await step(payer, order.id, 'sent', { utr: 'not a ref' })).status, 400);
-    const sent = await step(payer, order.id, 'sent', { utr: ' 4123 4567 8901 ' });
-    assert.equal(sent.body.status, 'sent');
-    assert.equal(sent.body.utr, '412345678901');
+    // No bank reference to type: the payer just says it has gone.
+    assert.equal((await step(supplier, order.id, 'sent')).status, 403);
+    assert.equal((await step(payer, order.id, 'sent')).body.status, 'sent');
 
     const blocked = await call<{ error: string }>('POST', '/payments', { token: payer, body: { payeeId: payee.id, amount: LAKH } });
     assert.equal(blocked.status, 409);
@@ -114,14 +112,12 @@ describe('ePay API (sandbox)', () => {
     assert.equal((await step(supplier, order.id, 'not-received')).body.status, 'not_received');
     const payerId = deps.store.getUserByMobile('9000000001')!.id;
     assert.deepEqual(deps.store.unpaidCommissions(payerId), []);
-    assert.equal((await step(payer, order.id, 'sent', { utr: 'HDFCR52026102612' })).body.status, 'sent');
+    assert.equal((await step(payer, order.id, 'sent')).body.status, 'sent');
     assert.equal(deps.store.unpaidCommissions(payerId).length, 1);
 
     assert.equal((await payCommission(payer, order.id)).body.commissionPaid, true);
     assert.deepEqual(deps.store.unpaidCommissions(payerId), []);
-    const received = await step(supplier, order.id, 'received');
-    assert.equal(received.body.status, 'received');
-    assert.equal(received.body.utr, 'HDFCR52026102612');
+    assert.equal((await step(supplier, order.id, 'received')).body.status, 'received');
     assert.equal((await step(supplier, order.id, 'received')).status, 409);
   });
 
@@ -135,8 +131,13 @@ describe('ePay API (sandbox)', () => {
     assert.equal(paid.body.status, 'awaiting_transfer');
   });
 
-  it('matches credits to ePay by the reference in the remarks, once, and only for the full commission', async () => {
+  it('makes the commission due once the payee confirms; matches credits by reference, once, for the full commission', async () => {
     const order = (await pay(payer, LAKH)).body;
+    // The payee confirming it arrived makes the commission due, without the payer doing anything.
+    assert.equal((await step(supplier, order.id, 'received')).body.status, 'received');
+    assert.equal((await view(payer, order.id)).body.status, 'received');
+    assert.equal(deps.store.unpaidCommissions(deps.store.getUserByMobile('9000000001')!.id).length, 1);
+
     const [prefix, code] = [order.reference.slice(0, 4), order.reference.slice(4)];
     assert.equal((await credit(rupees(200), 'UTR000000001', 'no reference here')).body.result, 'unmatched');
     assert.equal((await credit(rupees(199), 'UTR000000002', order.reference)).body.result, 'unmatched');
