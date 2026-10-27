@@ -76,7 +76,7 @@ export default function Payment() {
       <Card>
         <DetailRow label={isPayer ? 'To' : 'From'} value={otherName} />
         {isPayer ? <DetailRow label="Their account" value={`${order.payee.maskedAccountNumber} · ${order.payee.ifsc}`} /> : null}
-        {isPayer ? <DetailRow label="ePay commission" value={formatInr(order.fee)} /> : null}
+        {isPayer ? <DetailRow label="ePay commission, incl. GST" value={formatInr(order.fee)} /> : null}
         <DetailRow label="Reference" value={order.reference} />
         {order.utr ? <DetailRow label="Bank reference (UTR)" value={order.utr} copyable /> : null}
       </Card>

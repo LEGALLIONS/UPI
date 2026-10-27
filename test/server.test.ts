@@ -59,11 +59,12 @@ describe('ePay API (sandbox)', () => {
     assert.equal((await call('GET', '/payees/9000000002')).status, 401);
   });
 
-  it('plans a ₹3 lakh payment: bank transfer only, plus a 0.2% commission', async () => {
+  it('plans a ₹3 lakh payment: bank transfer only, plus a 0.2% commission including GST', async () => {
     const plan = await call<PlanView>('POST', '/payments/plan', { token: payer, body: { payeeId: payee.id, amount: 3 * LAKH } });
     assert.deepEqual(plan.body.options.map((option) => option.method), ['bank_transfer']);
     assert.equal(plan.body.fee, rupees(600));
     assert.equal(plan.body.feePercent, '0.2');
+    assert.equal(plan.body.gstIncluded, true);
   });
 
   it('shows the amount and the commission together; the payee confirms; the commission is matched from the bank', async () => {

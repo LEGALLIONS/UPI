@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   CRORE,
+  DEFAULT_FEE_POLICY,
   LAKH,
   bankName,
   buildUpiIntent,
@@ -106,7 +107,8 @@ describe('findReference', () => {
 });
 
 describe('feeFor', () => {
-  it('charges 0.2%, rounded to the nearest paisa', () => {
+  it('charges 0.2% including GST, rounded to the nearest paisa', () => {
+    assert.equal(DEFAULT_FEE_POLICY.gstIncluded, true);
     assert.equal(feePercent(), '0.2');
     assert.equal(feeFor(3 * LAKH), rupees(600));
     assert.equal(feeFor(CRORE), rupees(20_000));
@@ -118,7 +120,14 @@ describe('feeFor', () => {
   });
 
   it('follows a different rate when given one', () => {
-    assert.equal(feeFor(3 * LAKH, { rateBps: 50, minimum: rupees(1) }), rupees(1_500));
+    assert.equal(feeFor(3 * LAKH, { ...DEFAULT_FEE_POLICY, rateBps: 50 }), rupees(1_500));
+  });
+
+  it('adds GST on top when it is not included', () => {
+    const gstOnTop = { ...DEFAULT_FEE_POLICY, gstIncluded: false };
+    assert.equal(feeFor(3 * LAKH, gstOnTop), rupees(708));
+    assert.equal(feeFor(rupees(1_234.56), gstOnTop), 291);
+    assert.equal(feeFor(rupees(100), gstOnTop), rupees(1.18));
   });
 });
 

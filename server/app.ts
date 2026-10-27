@@ -199,7 +199,7 @@ export function createApiServer(deps: ApiDeps): Server {
     const amount = body.amount;
     if (typeof amount !== 'number') throw new HttpError(400, 'amount must be a number of paise');
     const plan = planCollection({ amount, merchantCategory: payeeUser.merchantCategory, payeeHasUpi: Boolean(payee.account.vpa) });
-    return { ...plan, fee: feeFor(amount, feePolicy), feePercent: feePercent(feePolicy) };
+    return { ...plan, fee: feeFor(amount, feePolicy), feePercent: feePercent(feePolicy), gstIncluded: feePolicy.gstIncluded };
   }
 
   /** The order, if the signed-in user paid or is being paid in it. */

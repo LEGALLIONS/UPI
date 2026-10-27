@@ -4,14 +4,14 @@ A mobile app for paying businesses by mobile number, above the ₹1 lakh UPI lim
 
 UPI stops at ₹1 lakh a day for most payments, and businesses often need to pay far more. ePay keeps UPI where it fits and uses bank transfer (IMPS, RTGS or NEFT) above that. Either way, the money goes **straight from the payer's bank to the payee's bank**. ePay never holds it, so there is no gateway settlement wait, and the payee has it in seconds. ePay never asks for a net banking password, and nobody types an account number.
 
-ePay earns a **0.2% commission** on each payment, on top of the amount. The payer sends it **at the same time** as the payment, straight into ePay's own permanent account: the amount goes to the payee's account, the commission to ePay's.
+ePay earns a **0.2% commission, GST included**, on each payment, on top of the amount. The payer sends it **at the same time** as the payment, straight into ePay's own permanent account: the amount goes to the payee's account, the commission to ePay's.
 
 ## How it works
 
 1. **Sign in** with mobile number and OTP.
 2. **Verify your bank account** by paying ₹1 by UPI. The bank reports the account number, IFSC, name and UPI ID the ₹1 came from (a *reverse penny drop*), and the ₹1 is refunded. Because these come from the bank, nobody can pass themselves off as another business, and payments to you land in the right account.
 3. **Find who to pay** by their mobile number. Only verified ePay users show up, with their name as their bank has it.
-4. **Enter the amount.** ePay shows the total: the amount, plus its commission (0.2%, at least ₹1).
+4. **Enter the amount.** ePay shows the total: the amount, plus its commission (0.2% including GST, at least ₹1).
 5. **Send both parts**, bank to bank:
    - **The amount** straight to the payee's verified UPI ID (within the UPI limit) or account, by IMPS (up to ₹5 lakh), RTGS (₹2 lakh and up) or NEFT
    - **The commission** straight to ePay's own account. The payer sees only the amount: ePay's account number, IFSC and name never reach the app
@@ -79,7 +79,7 @@ To update the app, run the workflow again and install the new APK over the old o
 | RTGS | From ₹2L, no maximum | Real time |
 | NEFT | No maximum | Half-hourly batches |
 
-The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers, so check the current NPCI circulars before launch. The commission rate is in `src/fees.ts`.
+The figures are in `src/limits.ts` and follow NPCI's change of 15 September 2025. Limits get revised, and banks can set lower ones for their own customers, so check the current NPCI circulars before launch. The commission rate and its GST are in `src/fees.ts`.
 
 ## Development
 
@@ -105,7 +105,7 @@ npm run typecheck
 
 - **Your commission account:** set `EPAY_ACCOUNT_NUMBER`, `EPAY_IFSC`, `EPAY_ACCOUNT_NAME` and `EPAY_UPI_ID` on the server (on Render: the service's **Environment** page). Use a current account with a business UPI ID, so its UPI link can carry the payment reference.
 - **Commission notifications:** ask your bank for API banking credit notifications (or a statement API) on that account, and point them at `/webhooks/commission`. Until then, commissions can't be confirmed automatically. A credit without the reference in its remarks is logged for a person to match.
-- **GST:** if ePay is GST-registered, its commission is a taxable service (usually 18%). Decide whether 0.2% includes GST or GST is added on top, and show it on the pay screen.
+- **GST:** the 0.2% includes GST (18%), so on ₹600 ePay's own share is ₹508.47 and ₹91.53 is GST. To add GST on top instead (₹708 on a ₹3 lakh payment), set `gstIncluded: false` in `DEFAULT_FEE_POLICY` in `src/fees.ts` and redeploy the server; the app's pay screen then reads "0.2% + GST" without a new APK. Issue GST invoices for the commissions, and check the treatment with your accountant.
 - **One-approval payments:** sign connected banking (API banking) agreements with the banks your payers use. ICICI, HDFC, Axis, Kotak, Yes Bank and others offer them to fintech partners. Implement `ConnectedBanking` in `src/providers/types.ts` for each, list the banks it supports, and point their notifications at `/webhooks/bank`. Payers at other banks keep the two-transfer method.
 - **Payee confirmation:** the payee still confirms receipt by hand. With a payee's consent, their bank's API can notify ePay of incoming credits so this happens automatically.
 - **Disputes:** payments go bank to bank, so a payment marked "Not received" is settled between payer and payee with their banks. Keep the UTRs, and have a support contact for these cases.
