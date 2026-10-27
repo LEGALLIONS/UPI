@@ -1,4 +1,4 @@
-import { randomBytes, randomInt } from 'node:crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { bankName } from '../src/banks.ts';
 import { findReference, paymentInstructions, referenceFor } from '../src/checkout.ts';
@@ -16,6 +16,7 @@ import type {
 } from '../src/providers/types.ts';
 import { planCollection } from '../src/router.ts';
 import type {
+  AdminComplaintView,
   ConfigResponse,
   MeView,
   OrderStatus,
@@ -40,6 +41,8 @@ export interface ApiDeps {
   sessions: Sessions;
   payeeLookups: RateLimiter;
   feePolicy: FeePolicy;
+  /** ePay staff's key for the /admin routes (reviewing complaints). Without it, those routes are off. */
+  adminToken?: string;
   /** Present only in sandbox mode: enables the /sandbox routes that simulate each step. */
   sandbox?: { partner: SandboxPartner; otpSender: SandboxOtpSender };
 }
@@ -51,7 +54,9 @@ export const SANDBOX_COMMISSION_ACCOUNT: CommissionAccount = {
   upiId: 'epay@sandbox',
 };
 
-export function createSandboxDeps(options: { webhookSecret?: string; commissionAccount?: CommissionAccount } = {}) {
+export function createSandboxDeps(
+  options: { webhookSecret?: string; commissionAccount?: CommissionAccount; adminToken?: string } = {},
+) {
   const partner = new SandboxPartner({
     webhookSecret: options.webhookSecret ?? randomBytes(32).toString('hex'),
     merchantVpa: 'epayverify@sandbox',
@@ -68,6 +73,7 @@ export function createSandboxDeps(options: { webhookSecret?: string; commissionA
     sessions: new Sessions(),
     payeeLookups: new RateLimiter(30, 60 * 60 * 1000),
     feePolicy: DEFAULT_FEE_POLICY,
+    adminToken: options.adminToken,
     sandbox: { partner, otpSender },
   } satisfies ApiDeps;
 }
@@ -91,12 +97,11 @@ interface Context {
 type Route = [method: string, path: RegExp, handler: (ctx: Context) => Promise<Reply>];
 
 const MAX_BODY_BYTES = 64 * 1024;
+const MAX_NOTE_LENGTH = 500;
 
 const STATUS_WORDS: Record<OrderStatus, string> = {
   awaiting_transfer: 'waiting for the money to be sent',
-  sent: 'marked as sent',
-  received: 'confirmed as received',
-  not_received: 'marked as not received',
+  sent: 'already sent',
 };
 
 export function createApiServer(deps: ApiDeps): Server {
@@ -156,6 +161,8 @@ export function createApiServer(deps: ApiDeps): Server {
       status: order.status,
       commissionPaid: role === 'payer' ? order.commissionPaid : null,
       instructions: role === 'payer' ? order.instructions : null,
+      complaint:
+        role === 'payer' && order.complaint ? { note: order.complaint.note, status: order.complaint.status } : null,
       reference: order.instructions.reference,
       createdAt: order.createdAt.toISOString(),
     };
@@ -188,6 +195,40 @@ export function createApiServer(deps: ApiDeps): Server {
     if ((role === 'payer') !== isPayer) throw new HttpError(403, `Only the ${role} can do that`);
     if (!from.includes(order.status)) throw new HttpError(409, `This payment is ${STATUS_WORDS[order.status]}`);
     return json(await orderView(store.updateOrder(order.id, await changes(order)), user.id));
+  }
+
+  /** ePay's decision on a complaint: waiving the commission unblocks the payer's next payment. */
+  function reviewComplaint(order: Order, outcome: unknown): Order {
+    if (outcome !== 'waive' && outcome !== 'reject') throw new HttpError(400, 'outcome must be waive or reject');
+    if (order.complaint?.status !== 'open') throw new HttpError(409, 'This payment has no open complaint');
+    return store.updateOrder(order.id, { complaint: { ...order.complaint, status: outcome === 'waive' ? 'waived' : 'rejected' } });
+  }
+
+  async function adminComplaintView(order: Order): Promise<AdminComplaintView> {
+    const party = async (userId: string) => {
+      const account = await accounts.getAccount(userId);
+      const user = store.getUser(userId);
+      if (!account || !user) throw new Error(`A party to ${order.id} has no verified account`);
+      return { name: account.holderName, mobile: user.mobile, accountNumber: account.accountNumber, ifsc: account.ifsc };
+    };
+    return {
+      paymentId: order.id,
+      reference: order.instructions.reference,
+      amount: order.amount,
+      fee: order.fee,
+      note: order.complaint?.note ?? '',
+      raisedAt: (order.complaint?.raisedAt ?? order.createdAt).toISOString(),
+      payer: await party(order.payerId),
+      payee: await party(order.payeeId),
+    };
+  }
+
+  function requireAdmin(ctx: Context): void {
+    const given = Buffer.from(ctx.req.headers.authorization?.match(/^Bearer (.+)$/)?.[1] ?? '');
+    const expected = Buffer.from(deps.adminToken ?? '');
+    if (!expected.length || given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      throw new HttpError(401, 'Not allowed');
+    }
   }
 
   /** Matches money arriving in ePay's account to a payment's commission, by the reference in its remarks. */
@@ -345,20 +386,47 @@ export function createApiServer(deps: ApiDeps): Server {
     [
       'POST',
       /^\/payments\/([^/]+)\/sent$/,
-      async (ctx) => transition(ctx, 'payer', ['awaiting_transfer', 'not_received'], () => ({ status: 'sent' })),
+      async (ctx) => transition(ctx, 'payer', ['awaiting_transfer'], () => ({ status: 'sent' })),
     ],
 
     [
       'POST',
-      /^\/payments\/([^/]+)\/received$/,
-      // The payee can confirm as soon as the money arrives, whether or not the payer has said they sent it.
-      async (ctx) => transition(ctx, 'payee', ['awaiting_transfer', 'sent', 'not_received'], () => ({ status: 'received' })),
+      /^\/payments\/([^/]+)\/complaint$/,
+      async (ctx) => {
+        const note = parseJson(ctx.body).note;
+        return transition(ctx, 'payer', ['sent'], (order) => {
+          if (order.commissionPaid) throw new HttpError(409, "ePay already has this payment's commission");
+          if (order.complaint) throw new HttpError(409, 'You already raised a complaint for this payment');
+          return {
+            complaint: {
+              note: typeof note === 'string' ? note.trim().slice(0, MAX_NOTE_LENGTH) : '',
+              raisedAt: new Date(),
+              status: 'open',
+            },
+          };
+        });
+      },
+    ],
+
+    [
+      'GET',
+      /^\/admin\/complaints$/,
+      async (ctx) => {
+        requireAdmin(ctx);
+        return json(await Promise.all(store.openComplaints().map(adminComplaintView)));
+      },
     ],
 
     [
       'POST',
-      /^\/payments\/([^/]+)\/not-received$/,
-      async (ctx) => transition(ctx, 'payee', ['sent'], () => ({ status: 'not_received' })),
+      /^\/admin\/payments\/([^/]+)\/complaint$/,
+      async (ctx) => {
+        requireAdmin(ctx);
+        const order = store.getOrder(ctx.params[0] ?? '');
+        if (!order) throw new HttpError(404, 'No such payment');
+        reviewComplaint(order, parseJson(ctx.body).outcome);
+        return json({ reviewed: true });
+      },
     ],
   ];
 
@@ -397,6 +465,16 @@ export function createApiServer(deps: ApiDeps): Server {
           });
           await handleCreditWebhook(webhook.rawBody, webhook.signature);
           return json(await orderView(store.getOrder(order.id)!, user.id));
+        },
+      ],
+      [
+        'POST',
+        /^\/sandbox\/payments\/([^/]+)\/complaint-review$/,
+        async (ctx) => {
+          // As if ePay staff checked the complaint: lets a tester see both outcomes from the app.
+          const { user, order } = await partyOrder(ctx);
+          if (order.payerId !== user.id) throw new HttpError(403, 'Only the payer can do that');
+          return json(await orderView(reviewComplaint(order, parseJson(ctx.body).outcome), user.id));
         },
       ],
     );

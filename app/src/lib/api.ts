@@ -62,22 +62,28 @@ export function createApi(token: string | null) {
     payments: () => request<OrderView[]>('GET', '/payments', token),
     payment: (id: string) => request<OrderView>('GET', `/payments/${encodeURIComponent(id)}`, token),
     markSent: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/sent`, token, {}),
-    markReceived: (id: string) => request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/received`, token, {}),
-    markNotReceived: (id: string) =>
-      request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/not-received`, token, {}),
+    /** The payer says the money didn't go; ePay checks and may waive the commission. */
+    raiseComplaint: (id: string, note: string) =>
+      request<OrderView>('POST', `/payments/${encodeURIComponent(id)}/complaint`, token, { note }),
     sandbox: {
       pennyDrop: (requestId: string, holderName: string) =>
         request<MeView>('POST', '/sandbox/penny-drop', token, { requestId, holderName }),
       /** As if ePay's bank reported the commission arriving. */
       payCommission: (orderId: string) =>
         request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/commission`, token, {}),
+      /** As if ePay staff checked the complaint and waived or rejected it. */
+      reviewComplaint: (orderId: string, outcome: 'waive' | 'reject') =>
+        request<OrderView>('POST', `/sandbox/payments/${encodeURIComponent(orderId)}/complaint-review`, token, { outcome }),
     },
   };
 }
 
 export type Api = ReturnType<typeof createApi>;
 
-/** The payer has sent the amount but ePay's commission hasn't arrived, so their next payment waits. Matches the server. */
+/**
+ * The payer has sent the amount but ePay's commission hasn't arrived (nor been
+ * waived after a complaint), so their next payment waits. Matches the server.
+ */
 export function isCommissionDue(order: OrderView): boolean {
-  return order.commissionPaid === false && (order.status === 'sent' || order.status === 'received');
+  return order.status === 'sent' && order.commissionPaid === false && order.complaint?.status !== 'waived';
 }

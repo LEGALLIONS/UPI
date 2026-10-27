@@ -26,10 +26,18 @@ export interface Order {
   /** Where the payer sends the amount, and then the commission, worked out when the order is made. */
   instructions: PaymentInstructions;
   status: OrderStatus;
+  /** The payer says the money didn't go. ePay checks, then waives the commission or keeps it due. */
+  complaint: Complaint | null;
   createdAt: Date;
 }
 
-export type OrderChanges = Partial<Pick<Order, 'status' | 'commissionPaid' | 'commissionUtr'>>;
+export interface Complaint {
+  note: string;
+  raisedAt: Date;
+  status: 'open' | 'waived' | 'rejected';
+}
+
+export type OrderChanges = Partial<Pick<Order, 'status' | 'commissionPaid' | 'commissionUtr' | 'complaint'>>;
 
 export function newOrderId(): string {
   return `ord_${randomUUID()}`;
@@ -59,12 +67,13 @@ export class MemoryStore {
     return id ? this.#users.get(id) : undefined;
   }
 
-  createOrder(fields: Omit<Order, 'commissionPaid' | 'commissionUtr' | 'status' | 'createdAt'>): Order {
+  createOrder(fields: Omit<Order, 'commissionPaid' | 'commissionUtr' | 'status' | 'complaint' | 'createdAt'>): Order {
     const order: Order = {
       ...fields,
       commissionPaid: false,
       commissionUtr: null,
       status: 'awaiting_transfer',
+      complaint: null,
       createdAt: new Date(),
     };
     this.#orders.set(order.id, order);
@@ -98,12 +107,18 @@ export class MemoryStore {
 
   /**
    * Payments this payer has sent without ePay's commission arriving: their next
-   * payment waits on these. Not while the payee says the money hasn't arrived.
+   * payment waits on these, unless ePay waived the commission after a complaint.
    */
   unpaidCommissions(payerId: string): Order[] {
     return [...this.#orders.values()].filter(
-      (order) => order.payerId === payerId && !order.commissionPaid && (order.status === 'sent' || order.status === 'received'),
+      (order) =>
+        order.payerId === payerId && order.status === 'sent' && !order.commissionPaid && order.complaint?.status !== 'waived',
     );
+  }
+
+  /** Complaints waiting for ePay to check, oldest first. */
+  openComplaints(): Order[] {
+    return [...this.#orders.values()].filter((order) => order.complaint?.status === 'open');
   }
 
   /** False if this bank reference was seen before, so a repeated credit notice is counted once. */

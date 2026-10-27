@@ -1,7 +1,7 @@
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { useCallback, useState, type ReactNode } from 'react';
 import { StyleSheet, Text } from 'react-native';
-import { Banner, Body, Button, Card, DetailRow, ErrorText, Loading, Screen, StatusChip, Title } from '../../components/ui';
+import { Banner, Body, Button, Card, DetailRow, ErrorText, Field, Loading, Screen, StatusChip, Title } from '../../components/ui';
 import { isCommissionDue, type OrderView, type TransferDetails } from '../../lib/api';
 import { amountInWords, formatInr } from '../../lib/money';
 import { useSession } from '../../lib/session';
@@ -17,8 +17,8 @@ export default function Payment() {
   const [order, setOrder] = useState<OrderView | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  // The commission is confirmed by ePay's bank and the other side acts on their
-  // own phone, so keep checking while this screen is open and anything is open.
+  // The commission is confirmed by ePay's bank, complaints by ePay staff, and the
+  // payer sends from their own phone, so keep checking while anything is open.
   useFocusEffect(
     useCallback(() => {
       let active = true;
@@ -29,7 +29,7 @@ export default function Payment() {
           if (!active) return;
           setOrder(latest);
           setLoadError(null);
-          if (latest.status !== 'received' || latest.commissionPaid === false) timer = setTimeout(poll, POLL_MS);
+          if (latest.status === 'awaiting_transfer' || isCommissionDue(latest)) timer = setTimeout(poll, POLL_MS);
         } catch (caught) {
           if (!active) return;
           setLoadError(caught instanceof Error ? caught.message : String(caught));
@@ -69,7 +69,7 @@ export default function Payment() {
         <StatusChip status={order.status} role={order.role} commissionDue={commissionDue} />
       </Card>
 
-      {isPayer ? <PayerStep order={order} onChange={setOrder} /> : <PayeeStep order={order} onChange={setOrder} />}
+      {isPayer ? <PayerStep order={order} onChange={setOrder} /> : <PayeeStep order={order} />}
       <ErrorText error={loadError} />
 
       <Card>
@@ -79,7 +79,7 @@ export default function Payment() {
         <DetailRow label="Reference" value={order.reference} />
       </Card>
 
-      {order.status === 'received' && !commissionDue ? (
+      {order.status === 'sent' && !commissionDue ? (
         <Button title="Back to home" variant="secondary" onPress={() => router.dismissTo('/')} />
       ) : null}
     </Screen>
@@ -93,7 +93,8 @@ interface StepProps {
 
 /**
  * Step 1: the amount, straight to the payee. Step 2, once it has gone: ePay's
- * commission by UPI. The payer's next payment waits until the commission arrives.
+ * commission by UPI. The payer's next payment waits until the commission arrives,
+ * unless ePay waives it after a complaint that the money didn't go.
  */
 function PayerStep({ order, onChange }: StepProps) {
   const { api } = useSession();
@@ -102,31 +103,23 @@ function PayerStep({ order, onChange }: StepProps) {
   if (!instructions) return null;
   const payee = order.payee.name;
 
-  if (order.status === 'sent' || order.status === 'received') {
+  if (order.status === 'sent') {
+    if (order.commissionPaid) {
+      return <Banner tone="success">✓ Done. ePay has received its {formatInr(order.fee)} commission. Thank you.</Banner>;
+    }
+    if (order.complaint?.status === 'waived') {
+      return <Banner tone="success">ePay checked your complaint and waived the commission. You can make your next payment.</Banner>;
+    }
     return (
       <>
-        {order.commissionPaid ? (
-          <Banner tone="success">✓ ePay has received its {formatInr(order.fee)} commission. Thank you.</Banner>
-        ) : (
-          <CommissionCard order={order} onChange={onChange} />
-        )}
-        {order.status === 'sent' ? (
-          <Banner tone="info">Waiting for {payee} to confirm the money has arrived in their account.</Banner>
-        ) : (
-          <Banner tone="success">{payee} confirmed they received it.</Banner>
-        )}
+        <CommissionCard order={order} onChange={onChange} />
+        <ComplaintCard order={order} onChange={onChange} />
       </>
     );
   }
 
   return (
     <>
-      {order.status === 'not_received' ? (
-        <Banner tone="error">
-          {payee} says the money hasn't arrived. Check with your bank, then enter the reference again once it has gone.
-        </Banner>
-      ) : null}
-
       <TransferCard
         title={`Step 1 of 2: Send ${formatInr(order.amount)} to ${payee}`}
         details={instructions.payment}
@@ -140,10 +133,7 @@ function PayerStep({ order, onChange }: StepProps) {
 
       <Card>
         <Title>Sent the {formatInr(order.amount)}?</Title>
-        <Body muted>
-          Tap once your bank or UPI app shows it has gone. Nothing to type. If {payee} confirms it first, this moves on by
-          itself.
-        </Body>
+        <Body muted>Tap once your bank or UPI app shows it has gone. Nothing to type.</Body>
         <ErrorText error={error} />
         <Button title="I've sent it" onPress={() => run(async () => onChange(await api.markSent(order.id)))} busy={busy} />
       </Card>
@@ -195,6 +185,56 @@ function CommissionCard({ order, onChange }: StepProps) {
   );
 }
 
+/**
+ * If the money didn't go: the payer tells ePay, whose staff check with the banks
+ * and waive the commission if so. Until then, the commission stays due.
+ */
+function ComplaintCard({ order, onChange }: StepProps) {
+  const { api, sandbox } = useSession();
+  const { run, busy, error } = useAction();
+  const [writing, setWriting] = useState(false);
+  const [note, setNote] = useState('');
+  const review = (outcome: 'waive' | 'reject') => run(async () => onChange(await api.sandbox.reviewComplaint(order.id, outcome)));
+
+  if (order.complaint?.status === 'open') {
+    return (
+      <Card>
+        <Banner tone="info">
+          Complaint raised. ePay is checking with the banks and will waive the commission if the money didn't go.
+        </Banner>
+        {sandbox ? (
+          <>
+            <Button title="Simulate ePay waiving it" variant="secondary" onPress={() => review('waive')} busy={busy} />
+            <Button title="Simulate ePay rejecting it" variant="link" onPress={() => review('reject')} disabled={busy} />
+          </>
+        ) : null}
+        <ErrorText error={error} />
+      </Card>
+    );
+  }
+  if (order.complaint?.status === 'rejected') {
+    return <Banner tone="warning">ePay checked your complaint: the money went, so the commission is still due.</Banner>;
+  }
+  if (!writing) return <Button title="Money didn't go? Raise a complaint" variant="link" onPress={() => setWriting(true)} />;
+  return (
+    <Card>
+      <Title>Raise a complaint</Title>
+      <Body>
+        If the {formatInr(order.amount)} didn't reach {order.payee.name}, tell ePay. ePay checks with the banks and waives the
+        commission if the money didn't go.
+      </Body>
+      <Field label="What happened? (optional)" value={note} onChangeText={setNote} maxLength={500} multiline />
+      <ErrorText error={error} />
+      <Button
+        title="Raise complaint"
+        variant="secondary"
+        onPress={() => run(async () => onChange(await api.raiseComplaint(order.id, note)))}
+        busy={busy}
+      />
+    </Card>
+  );
+}
+
 /** One transfer: a UPI button when it fits, and the bank details to copy. */
 function TransferCard({
   title,
@@ -233,56 +273,18 @@ function TransferCard({
   );
 }
 
-function PayeeStep({ order, onChange }: StepProps) {
-  const { api } = useSession();
-  const { run, busy, error } = useAction();
-  const payer = order.payer.name;
-  const confirm = () => run(async () => onChange(await api.markReceived(order.id)));
-
-  switch (order.status) {
-    case 'awaiting_transfer':
-      return (
-        <Card>
-          <Title>Has {formatInr(order.amount)} arrived?</Title>
-          <Body>
-            {payer} is paying you straight into your account {order.payee.maskedAccountNumber}. Confirm here as soon as it arrives.
-          </Body>
-          <ErrorText error={error} />
-          <Button title="Yes, I received it" onPress={confirm} busy={busy} />
-        </Card>
-      );
-
-    case 'sent':
-      return (
-        <Card>
-          <Title>Did you receive {formatInr(order.amount)}?</Title>
-          <Body>
-            {payer} says they've sent it. Check your bank account {order.payee.maskedAccountNumber} for this amount, with{' '}
-            {order.reference} in the remarks.
-          </Body>
-          <ErrorText error={error} />
-          <Button title="Yes, I received it" onPress={confirm} busy={busy} />
-          <Button
-            title="Not received yet"
-            variant="secondary"
-            onPress={() => run(async () => onChange(await api.markNotReceived(order.id)))}
-            disabled={busy}
-          />
-        </Card>
-      );
-
-    case 'not_received':
-      return (
-        <Card>
-          <Banner tone="warning">You said it hasn't arrived. {payer} has been asked to check with their bank.</Banner>
-          <ErrorText error={error} />
-          <Button title="It's arrived now" onPress={confirm} busy={busy} />
-        </Card>
-      );
-
-    case 'received':
-      return <Banner tone="success">You confirmed you received it. Done.</Banner>;
-  }
+/** The payee just sees the money coming. ePay doesn't ask them to confirm it. */
+function PayeeStep({ order }: { order: OrderView }) {
+  const where = `straight into your account ${order.payee.maskedAccountNumber}, with ${order.reference} in the remarks`;
+  return order.status === 'awaiting_transfer' ? (
+    <Banner tone="info">
+      {order.payer.name} is paying you {formatInr(order.amount)} {where}.
+    </Banner>
+  ) : (
+    <Banner tone="success">
+      {order.payer.name} has sent {formatInr(order.amount)} {where}. Check your bank for it.
+    </Banner>
+  );
 }
 
 const styles = StyleSheet.create({

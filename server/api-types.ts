@@ -76,12 +76,10 @@ export type PaymentRequest = PlanRequest;
 /**
  * The payment itself; the commission is tracked separately in commissionPaid.
  * awaiting_transfer: the payer sends the amount straight to the payee's bank.
- * sent: the payer says it has gone; the payee checks their account.
- * received: the payee has confirmed it arrived (they can before the payer says it has gone). Done.
- * not_received: the payee can't find it; the payer checks with their bank and says it has gone again.
- * Once it's sent or received, ePay's commission is due.
+ * sent: the payer has sent it, so ePay's commission is due. If the money didn't
+ * go, the payer raises a complaint and ePay waives the commission after checking.
  */
-export type OrderStatus = 'awaiting_transfer' | 'sent' | 'received' | 'not_received';
+export type OrderStatus = 'awaiting_transfer' | 'sent';
 
 export interface PartyView {
   id: string;
@@ -101,9 +99,33 @@ export interface OrderView {
   commissionPaid: boolean | null;
   /** Payer only: where to send the amount, and then the commission to pay. */
   instructions: PaymentInstructions | null;
+  /** Payer only: their complaint that the money didn't go, and what ePay decided. */
+  complaint: { note: string; status: 'open' | 'waived' | 'rejected' } | null;
   /** Short code in the UPI note or transfer remarks, for matching the transfers to this payment. */
   reference: string;
   createdAt: string;
+}
+
+export interface ComplaintRequest {
+  /** What went wrong, in the payer's words. */
+  note?: string;
+}
+
+/** ePay staff's decision on a complaint, after checking with the banks. */
+export interface ComplaintReview {
+  outcome: 'waive' | 'reject';
+}
+
+/** A complaint as ePay staff see it, with both accounts so they can check with the banks. */
+export interface AdminComplaintView {
+  paymentId: string;
+  reference: string;
+  amount: Paise;
+  fee: Paise;
+  note: string;
+  raisedAt: string;
+  payer: { name: string; mobile: string; accountNumber: string; ifsc: string };
+  payee: { name: string; mobile: string; accountNumber: string; ifsc: string };
 }
 
 export interface SandboxPennyDropRequest {
