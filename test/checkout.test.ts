@@ -12,7 +12,6 @@ import {
   paymentInstructions,
   planCollection,
   rupees,
-  splitLegs,
   toRupeeString,
 } from '../src/index.ts';
 
@@ -26,7 +25,7 @@ const orderId = 'ord_9c1d2e3f-0000-4a5b-8c7d-ab12cd34ef56';
 const commissionAccount = { accountNumber: '777705550001', ifsc: 'ICIC0000001', name: 'EPAY TECHNOLOGIES', upiId: 'epay@icici' };
 
 describe('paymentInstructions', () => {
-  it("sends the amount straight to the payee and the commission straight to ePay's account", () => {
+  it('sends the amount straight to the payee, and the commission by UPI to ePay without its account details', () => {
     const plan = planCollection({ amount: rupees(45_000.5) });
     const instructions = paymentInstructions({ orderId, payee, plan, fee: feeFor(plan.amount), commissionAccount });
     assert.equal(instructions.reference, 'EPAYCD34EF56');
@@ -38,8 +37,8 @@ describe('paymentInstructions', () => {
     assert.deepEqual(instructions.commission, {
       amount: 9000,
       upiIntent: 'upi://pay?pa=epay%40icici&pn=EPAY%20TECHNOLOGIES&am=90.00&cu=INR&tr=EPAYCD34EF56&tn=EPAYCD34EF56',
-      bankTransfer: { accountNumber: '777705550001', ifsc: 'ICIC0000001', beneficiaryName: 'EPAY TECHNOLOGIES', rails: ['imps', 'neft'] },
     });
+    assert.doesNotMatch(JSON.stringify(instructions.commission), /777705550001|ICIC0000001/);
   });
 
   it('leaves out UPI for the amount above the limit, or when the payee has no UPI ID', () => {
@@ -53,39 +52,10 @@ describe('paymentInstructions', () => {
     assert.equal(paymentInstructions({ orderId, payee: noUpi, plan, fee: rupees(200), commissionAccount }).payment.upiIntent, null);
   });
 
-  it('sends a commission over the UPI limit by bank transfer only', () => {
+  it('has no UPI link for a commission over the UPI limit', () => {
     const plan = planCollection({ amount: 6 * CRORE });
     const instructions = paymentInstructions({ orderId, payee, plan, fee: feeFor(plan.amount), commissionAccount });
-    assert.equal(instructions.commission.amount, rupees(1_20_000));
-    assert.equal(instructions.commission.upiIntent, null);
-    assert.deepEqual(instructions.commission.bankTransfer.rails, ['imps', 'neft']);
-  });
-});
-
-describe('splitLegs', () => {
-  it("puts both parts to the payer's bank on the fastest rail, with the reference", () => {
-    const plan = planCollection({ amount: 10 * LAKH });
-    const instructions = paymentInstructions({ orderId, payee, plan, fee: feeFor(plan.amount), commissionAccount });
-    assert.deepEqual(splitLegs(instructions, ['payment', 'commission']), [
-      {
-        part: 'payment',
-        amount: 10 * LAKH,
-        rail: 'rtgs',
-        beneficiary: { accountNumber: '00112233445566', ifsc: 'ICIC0000123', name: 'MEENA STEELS' },
-        reference: 'EPAYCD34EF56',
-      },
-      {
-        part: 'commission',
-        amount: rupees(2_000),
-        rail: 'imps',
-        beneficiary: { accountNumber: '777705550001', ifsc: 'ICIC0000001', name: 'EPAY TECHNOLOGIES' },
-        reference: 'EPAYCD34EF56',
-      },
-    ]);
-    assert.deepEqual(
-      splitLegs(instructions, ['commission']).map((leg) => leg.part),
-      ['commission'],
-    );
+    assert.deepEqual(instructions.commission, { amount: rupees(1_20_000), upiIntent: null });
   });
 });
 

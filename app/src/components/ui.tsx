@@ -171,18 +171,16 @@ export function DetailRow({
   );
 }
 
-type ChipTone = 'action' | 'waiting' | 'done' | 'problem';
+type ChipTone = 'action' | 'waiting' | 'done';
 type Role = 'payer' | 'payee';
 
 // What each step means to the person looking: something for them to do, or for the other side.
 const STATUS_CHIPS: Record<OrderStatus, Record<Role, [label: string, tone: ChipTone]>> = {
-  awaiting_transfer: { payer: ['Send now', 'action'], payee: ['Not sent yet', 'waiting'] },
-  sent: { payer: ['Awaiting confirmation', 'waiting'], payee: ['Confirm receipt', 'action'] },
-  received: { payer: ['Paid', 'done'], payee: ['Received', 'done'] },
-  not_received: { payer: ['Not received', 'problem'], payee: ['Not received', 'problem'] },
+  awaiting_transfer: { payer: ['Send now', 'action'], payee: ['Incoming', 'waiting'] },
+  sent: { payer: ['Paid', 'done'], payee: ['Sent to you', 'done'] },
 };
 
-/** commissionDue: the payer has sent the money but ePay's commission hasn't arrived. */
+/** commissionDue: the payer has sent the amount but ePay's commission hasn't arrived. */
 export function StatusChip({ status, role, commissionDue = false }: { status: OrderStatus; role: Role; commissionDue?: boolean }) {
   const [label, tone]: [string, ChipTone] = commissionDue ? ['Commission due', 'action'] : STATUS_CHIPS[status][role];
   return (
@@ -263,10 +261,8 @@ const styles = StyleSheet.create({
   chip_action: { backgroundColor: colors.infoBg },
   chip_waiting: { backgroundColor: colors.warningBg },
   chip_done: { backgroundColor: colors.successBg },
-  chip_problem: { backgroundColor: colors.errorBg },
   chipText: { fontSize: 13, fontWeight: '600' },
   chipText_action: { color: colors.blue },
   chipText_waiting: { color: colors.warningText },
   chipText_done: { color: colors.green },
-  chipText_problem: { color: colors.error },
 });

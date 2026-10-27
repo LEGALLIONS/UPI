@@ -3,8 +3,6 @@ import type { VerifiedAccountStore } from '../onboarding.ts';
 import { rupees } from '../money.ts';
 import { buildUpiIntent } from '../upi-intent.ts';
 import type {
-  BankEvent,
-  ConnectedBanking,
   CreditEvent,
   CreditNotifications,
   PennyDropResult,
@@ -22,22 +20,18 @@ export interface SandboxOptions {
   webhookSecret: string;
   merchantVpa?: string;
   merchantName?: string;
-  /** IFSC prefixes of the banks to pretend ePay has API agreements with; all banks if left out. */
-  connectedBanks?: string[];
 }
 
-export class SandboxPartner implements ReversePennyDropProvider, CreditNotifications, ConnectedBanking {
+export class SandboxPartner implements ReversePennyDropProvider, CreditNotifications {
   #webhookSecret: string;
   #merchantVpa: string;
   #merchantName: string;
-  #connectedBanks: string[] | undefined;
   #nextId = 1;
 
   constructor(options: SandboxOptions) {
     this.#webhookSecret = options.webhookSecret;
     this.#merchantVpa = options.merchantVpa ?? 'merchant@sandbox';
     this.#merchantName = options.merchantName ?? 'Sandbox Merchant';
-    this.#connectedBanks = options.connectedBanks;
   }
 
   async createRequest(_input: Parameters<ReversePennyDropProvider['createRequest']>[0]): Promise<UpiPaymentRequest> {
@@ -67,29 +61,6 @@ export class SandboxPartner implements ReversePennyDropProvider, CreditNotificat
 
   /** What ePay's bank would POST to your webhook when money arrives in ePay's account. */
   simulateCreditWebhook(event: CreditEvent) {
-    return this.#signed(event);
-  }
-
-  supports(ifsc: string): boolean {
-    return !this.#connectedBanks || this.#connectedBanks.includes(ifsc.slice(0, 4).toUpperCase());
-  }
-
-  async startLink(_input: Parameters<ConnectedBanking['startLink']>[0]) {
-    return { linkId: this.#id('lnk') };
-  }
-
-  async requestSplitPayment(_input: Parameters<ConnectedBanking['requestSplitPayment']>[0]) {
-    return { requestId: this.#id('spl') };
-  }
-
-  async parseBankWebhook(rawBody: string, signature: string): Promise<BankEvent> {
-    const body = this.#verify(rawBody, signature);
-    if (!isBankEvent(body)) throw new Error('Webhook body is not a bank event');
-    return body;
-  }
-
-  /** What the payer's bank would POST to your webhook when they approve or decline. */
-  simulateBankWebhook(event: BankEvent) {
     return this.#signed(event);
   }
 
@@ -141,25 +112,6 @@ function isPennyDropResult(value: unknown): value is PennyDropResult {
   return (
     [account.accountNumber, account.ifsc, account.holderName].every((field) => typeof field === 'string') &&
     (account.vpa === undefined || typeof account.vpa === 'string')
-  );
-}
-
-function isBankEvent(value: unknown): value is BankEvent {
-  if (typeof value !== 'object' || value === null) return false;
-  const body = value as Record<string, unknown>;
-  if (body.kind === 'link') {
-    return typeof body.linkId === 'string' && (body.status === 'approved' || body.status === 'declined');
-  }
-  return (
-    body.kind === 'split' &&
-    typeof body.requestId === 'string' &&
-    Array.isArray(body.legs) &&
-    body.legs.every(
-      (leg: Record<string, unknown>) =>
-        (leg.part === 'payment' || leg.part === 'commission') &&
-        (leg.status === 'success' || leg.status === 'failed') &&
-        (leg.utr === null || typeof leg.utr === 'string'),
-    )
   );
 }
 

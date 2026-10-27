@@ -1,7 +1,7 @@
 import { DEFAULT_LIMITS, type RailLimits } from './limits.ts';
 import type { Paise } from './money.ts';
-import type { CommissionAccount, Payee, SplitLeg } from './providers/types.ts';
-import { planPayout, type CollectionPlan, type TransferRail } from './router.ts';
+import type { CommissionAccount, Payee } from './providers/types.ts';
+import type { CollectionPlan, TransferRail } from './router.ts';
 import { buildUpiIntent } from './upi-intent.ts';
 
 export interface TransferDetails {
@@ -12,15 +12,17 @@ export interface TransferDetails {
 }
 
 /**
- * What the payer sends, both at once and in either order: the amount straight
- * to the payee's own account, and ePay's commission straight to ePay's own
- * account. ePay never holds the amount, so there is no settlement wait.
+ * What the payer sends: first the amount, straight to the payee's own account,
+ * then ePay's commission by UPI. ePay never holds the amount, so there is no
+ * settlement wait. ePay's account details stay out of it: payers see only the
+ * commission amount and a UPI link.
  */
 export interface PaymentInstructions {
   /** Goes in the UPI note or transfer remarks of both, so each can be matched to this payment. */
   reference: string;
   payment: TransferDetails;
-  commission: TransferDetails;
+  /** upiIntent is null when the commission is over the UPI limit; the payer then contacts ePay. */
+  commission: { amount: Paise; upiIntent: string | null };
 }
 
 /** "EPAY" and 8 letters or digits, e.g. EPAY9DCCD008. */
@@ -70,28 +72,7 @@ export function paymentInstructions(
               note: reference,
             })
           : null,
-      bankTransfer: {
-        accountNumber: commissionAccount.accountNumber,
-        ifsc: commissionAccount.ifsc,
-        beneficiaryName: commissionAccount.name,
-        rails: planPayout({ amount: fee, urgent: true }, limits).map((option) => option.rail),
-      },
     },
   };
 }
 
-/** The parts still to send, as legs for the payer's bank, each on the fastest rail that fits. */
-export function splitLegs(instructions: PaymentInstructions, parts: SplitLeg['part'][]): SplitLeg[] {
-  return parts.map((part) => {
-    const { amount, bankTransfer } = instructions[part];
-    const rail = bankTransfer.rails[0];
-    if (!rail) throw new Error(`No bank transfer rail for the ${part}`);
-    return {
-      part,
-      amount,
-      rail,
-      beneficiary: { accountNumber: bankTransfer.accountNumber, ifsc: bankTransfer.ifsc, name: bankTransfer.beneficiaryName },
-      reference: instructions.reference,
-    };
-  });
-}

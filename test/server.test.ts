@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
-import type { MeView, OrderView, PayeeView, PlanView } from '../server/api-types.ts';
+import type { AdminComplaintView, MeView, OrderView, PayeeView, PlanView } from '../server/api-types.ts';
 import { createSandboxDeps } from '../server/app.ts';
 import { CRORE, LAKH, rupees } from '../src/index.ts';
 import { startApi } from './helpers.ts';
 
 describe('ePay API (sandbox)', () => {
-  const deps = createSandboxDeps();
+  const deps = createSandboxDeps({ adminToken: 'staff-key' });
   let api: Awaited<ReturnType<typeof startApi>>;
   const call: typeof api.call = (...args) => api.call(...args);
   const signIn = (mobile: string) => api.signIn(mobile);
@@ -67,7 +67,7 @@ describe('ePay API (sandbox)', () => {
     assert.equal(plan.body.gstIncluded, true);
   });
 
-  it('shows the amount and the commission together; the payee confirms; the commission is matched from the bank', async () => {
+  it('takes the amount first, then the commission; the next payment waits on the commission; the payee confirms', async () => {
     const created = await pay(payer, 3 * LAKH);
     assert.equal(created.status, 201);
     const order = created.body;
@@ -98,29 +98,23 @@ describe('ePay API (sandbox)', () => {
     assert.equal(asPayee.body.commissionPaid, null);
     assert.equal(asPayee.body.reference, order.reference);
     assert.equal(asPayee.body.payer.name, 'ARUN TRADERS');
+    assert.equal(asPayee.body.complaint, null);
 
-    assert.equal((await step(supplier, order.id, 'sent', { utr: '412345678901' })).status, 403);
-    assert.equal((await step(payer, order.id, 'sent', { utr: 'not a ref' })).status, 400);
-    const sent = await step(payer, order.id, 'sent', { utr: ' 4123 4567 8901 ' });
-    assert.equal(sent.body.status, 'sent');
-    assert.equal(sent.body.utr, '412345678901');
+    // No bank reference to type and no confirmation from the payee: once the payer has sent it, the commission is due.
+    assert.equal((await step(supplier, order.id, 'sent')).status, 403);
+    assert.equal((await step(payer, order.id, 'sent')).body.status, 'sent');
+    assert.equal((await step(payer, order.id, 'sent')).status, 409);
 
     const blocked = await call<{ error: string }>('POST', '/payments', { token: payer, body: { payeeId: payee.id, amount: LAKH } });
     assert.equal(blocked.status, 409);
-    assert.match(blocked.body.error, new RegExp(order.reference));
+    assert.match(blocked.body.error, new RegExp(`₹600\\.00 commission for your payment ${order.reference}`));
 
     assert.equal((await payCommission(payer, order.id)).body.commissionPaid, true);
-
-    assert.equal((await step(payer, order.id, 'received')).status, 403);
-    assert.equal((await step(supplier, order.id, 'not-received')).body.status, 'not_received');
-    assert.equal((await step(payer, order.id, 'sent', { utr: 'HDFCR52026102612' })).body.status, 'sent');
-    const received = await step(supplier, order.id, 'received');
-    assert.equal(received.body.status, 'received');
-    assert.equal(received.body.utr, 'HDFCR52026102612');
-    assert.equal((await step(supplier, order.id, 'received')).status, 409);
+    assert.deepEqual(deps.store.unpaidCommissions(deps.store.getUserByMobile('9000000001')!.id), []);
+    assert.equal((await step(payer, order.id, 'complaint', { note: 'paid already' })).status, 409);
   });
 
-  it("sends UPI straight to the payee's own UPI ID when it fits; the commission can come first", async () => {
+  it("sends UPI straight to the payee's own UPI ID when it fits; a commission that arrives early still counts", async () => {
     const order = (await pay(payer, rupees(50_000))).body;
     const upi = order.instructions?.payment.upiIntent ?? '';
     assert.match(upi, /^upi:\/\/pay\?pa=9000000002%40sandbox&pn=MEENA%20STEELS&am=50000\.00&cu=INR&tn=EPAY/);
@@ -132,6 +126,8 @@ describe('ePay API (sandbox)', () => {
 
   it('matches credits to ePay by the reference in the remarks, once, and only for the full commission', async () => {
     const order = (await pay(payer, LAKH)).body;
+    await step(payer, order.id, 'sent');
+
     const [prefix, code] = [order.reference.slice(0, 4), order.reference.slice(4)];
     assert.equal((await credit(rupees(200), 'UTR000000001', 'no reference here')).body.result, 'unmatched');
     assert.equal((await credit(rupees(199), 'UTR000000002', order.reference)).body.result, 'unmatched');
@@ -172,5 +168,39 @@ describe('ePay API (sandbox)', () => {
     assert.deepEqual(received.body.map((order) => order.role), ['payee', 'payee', 'payee']);
     const other = await signIn('9000000004');
     assert.equal((await view(other, sent.body[0]!.id)).status, 404);
+  });
+
+  it('waives the commission after a complaint, once ePay staff have checked', async () => {
+    const admin = <T>(method: string, path: string, body?: unknown, token = 'staff-key') => call<T>(method, path, { token, body });
+    const order = (await pay(payer, rupees(80_000))).body;
+    assert.equal((await step(payer, order.id, 'complaint')).status, 409, 'not sent yet');
+    await step(payer, order.id, 'sent');
+    assert.equal((await step(supplier, order.id, 'complaint')).status, 403);
+    const raised = await step(payer, order.id, 'complaint', { note: ' My bank says it failed ' });
+    assert.deepEqual(raised.body.complaint, { note: 'My bank says it failed', status: 'open' });
+    assert.equal((await step(payer, order.id, 'complaint')).status, 409, 'one complaint per payment');
+    assert.equal((await pay(payer, LAKH)).status, 409, 'the commission stays due while ePay checks');
+
+    assert.equal((await admin('GET', '/admin/complaints', undefined, 'wrong-key')).status, 401);
+    const open = await admin<AdminComplaintView[]>('GET', '/admin/complaints');
+    assert.deepEqual(open.body.map((complaint) => complaint.reference), [order.reference]);
+    assert.equal(open.body[0]!.payer.accountNumber, '50109000000001');
+    assert.equal(open.body[0]!.payee.mobile, '9000000002');
+    assert.equal((await admin('POST', `/admin/payments/${order.id}/complaint`, { outcome: 'waive' })).status, 200);
+    assert.equal((await view(payer, order.id)).body.complaint?.status, 'waived');
+    assert.deepEqual((await admin('GET', '/admin/complaints')).body, []);
+    assert.equal((await admin('POST', `/admin/payments/${order.id}/complaint`, { outcome: 'reject' })).status, 409);
+
+    // Waived, so the next payment can go. A rejected complaint leaves its commission due.
+    const next = await pay(payer, LAKH);
+    assert.equal(next.status, 201);
+    await step(payer, next.body.id, 'sent');
+    await step(payer, next.body.id, 'complaint');
+    const reviewed = await call<OrderView>('POST', `/sandbox/payments/${next.body.id}/complaint-review`, {
+      token: payer,
+      body: { outcome: 'reject' },
+    });
+    assert.equal(reviewed.body.complaint?.status, 'rejected');
+    assert.equal((await pay(payer, LAKH)).status, 409);
   });
 });

@@ -9,7 +9,8 @@ const publicUrl =
   process.env.PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? `http://${lanAddress() ?? 'localhost'}:${port}`;
 
 const commissionAccount = commissionAccountFromEnv();
-const deps = createSandboxDeps({ webhookSecret: process.env.WEBHOOK_SECRET, commissionAccount });
+// ADMIN_TOKEN is ePay staff's key for reviewing complaints; without it, the /admin routes are off.
+const deps = createSandboxDeps({ webhookSecret: process.env.WEBHOOK_SECRET, commissionAccount, adminToken: process.env.ADMIN_TOKEN });
 createApiServer(deps).listen(port, () => {
   console.log(`ePay API (sandbox, no real money) on ${publicUrl}`);
   console.log(`Commissions go to ${deps.commissionAccount.name}, ${deps.commissionAccount.accountNumber} / ${deps.commissionAccount.upiId}`);

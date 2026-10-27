@@ -45,9 +45,9 @@ for (const [label, payment] of scenarios) {
   for (const option of plan.unavailable) console.log(`     ✗ ${option.method}: ${option.reason}`);
 }
 
-console.log('\n3. The customer pays ₹3 lakh: the amount to Meena Steels and the ₹600 commission to ePay, at the same time');
+console.log('\n3. The customer pays ₹3 lakh to Meena Steels, then the ₹600 commission to ePay by UPI');
 const commissionAccount = { accountNumber: '777705550001', ifsc: 'ICIC0000001', name: 'EPAY TECHNOLOGIES', upiId: 'epay@icici' };
 const payee = { id: supplier.id, name: 'MEENA STEELS', account: (await accounts.getAccount(supplier.id))! };
 const plan = planCollection({ amount: 3 * LAKH });
 console.dir(paymentInstructions({ orderId: 'ord_1', payee, plan, fee: feeFor(plan.amount), commissionAccount }), { depth: 4 });
-console.log('   Both go straight from their bank: the amount to Meena Steels, the commission to ePay. Nothing waits on a settlement.');
+console.log('   Both go straight from their bank: the amount to Meena Steels, then the commission to ePay. Nothing waits on a settlement.');

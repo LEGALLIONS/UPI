@@ -14,3 +14,6 @@ services:
     envVars:
       - key: WEBHOOK_SECRET
         generateValue: true
+      # ePay staff's key for reviewing complaints (see the README).
+      - key: ADMIN_TOKEN
+        generateValue: true
