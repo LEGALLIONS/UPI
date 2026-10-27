@@ -79,9 +79,12 @@ export interface PlanRequest {
 
 /** The ways to send the amount, plus ePay's commission, which the payer sends at the same time to ePay's account. */
 export interface PlanView extends CollectionPlan {
+  /** What the payer sends ePay, GST included. */
   fee: Paise;
   /** "0.2" */
   feePercent: string;
+  /** true: feePercent includes GST. false: GST was added on top of it. */
+  gstIncluded: boolean;
 }
 
 export type PaymentRequest = PlanRequest;

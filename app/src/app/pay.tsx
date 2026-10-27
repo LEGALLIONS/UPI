@@ -72,7 +72,10 @@ export default function Pay() {
             <Text style={styles.totalLabel}>You pay in total</Text>
             <Text style={styles.total}>{formatInr(plan.amount + plan.fee)}</Text>
             <DetailRow label={`To ${payee.name}, straight to their bank`} value={formatInr(plan.amount)} />
-            <DetailRow label={`ePay commission (${plan.feePercent}%), to ePay's account`} value={formatInr(plan.fee)} />
+            <DetailRow
+              label={`ePay commission (${plan.feePercent}% ${plan.gstIncluded ? 'incl.' : '+'} GST), to ePay's account`}
+              value={formatInr(plan.fee)}
+            />
             <Body muted>Two transfers, sent at the same time in whichever order you like.</Body>
           </Card>
           <ErrorText error={error} />
